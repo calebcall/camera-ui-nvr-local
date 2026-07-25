@@ -210,3 +210,25 @@ func TestDetectionEventIngester_Notify_PublishErrorIsSwallowed(t *testing.T) {
 	// No panic, and the earlier "swallowed, not surfaced" contract is
 	// implicitly proven by this test simply completing.
 }
+
+// TestDetectionSummary verifies the notification Body summarizes detected
+// objects by best confidence (highest first) plus recognized attributes.
+func TestDetectionSummary(t *testing.T) {
+	event := sdk.DetectionEvent{
+		Segments: []sdk.EventSegment{
+			{
+				Detections: []sdk.EventDetection{
+					{Label: "person", Score: 0.94},
+					{Label: "vehicle", Score: 0.81},
+				},
+				Attributes: []sdk.EventAttribute{{Type: "face", Label: "Caleb"}},
+			},
+		},
+	}
+	if got, want := detectionSummary(event), "Person 94%, Vehicle 81% · Caleb"; got != want {
+		t.Fatalf("detectionSummary = %q, want %q", got, want)
+	}
+	if got := detectionSummary(sdk.DetectionEvent{}); got != "" {
+		t.Fatalf("empty event summary = %q, want empty", got)
+	}
+}

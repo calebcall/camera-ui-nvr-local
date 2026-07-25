@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"sort"
+	"strings"
 	"sync"
 	"unicode"
 
@@ -351,6 +353,7 @@ func (i *detectionEventIngester) notify(event sdk.DetectionEvent) {
 
 	n := &sdk.Notification{
 		Title:     fmt.Sprintf("%s — %s", cameraTitle, titleCaseLabel(store.PrimaryLabel(event))),
+		Body:      detectionSummary(event),
 		Severity:  sdk.SeverityInfo,
 		Thumbnail: event.Thumbnail,
 		// The camera.ui route is /cameras/:cameraname and resolves by the
@@ -366,6 +369,74 @@ func (i *detectionEventIngester) notify(event sdk.DetectionEvent) {
 	if err := i.notifier.Publish(n); err != nil && i.logger != nil {
 		i.logger.Error("nvr-local: publish notification failed:", err)
 	}
+}
+
+// detectionSummary builds the human-facing notification Body from an event's
+// object detections and recognized attributes — the extra "info" beyond the
+// "<Camera> — <Label>" title. Detected object types are listed with their
+// best confidence, highest first (e.g. "Person 94%, Vehicle 81%"), followed
+// by any recognized attribute labels — face identities, plate text, or
+// classifier labels (e.g. "· Caleb"). Returns "" when there are no
+// detections/attributes (a motion-only event, which the notify path does not
+// publish anyway); the notifier then falls back to the title.
+func detectionSummary(event sdk.DetectionEvent) string {
+	best := map[string]float64{}
+	for _, seg := range event.Segments {
+		for _, d := range seg.Detections {
+			if d.Label == "" {
+				continue
+			}
+			if s, ok := best[d.Label]; !ok || d.Score > s {
+				best[d.Label] = d.Score
+			}
+		}
+	}
+
+	type labelScore struct {
+		label string
+		score float64
+	}
+	ranked := make([]labelScore, 0, len(best))
+	for label, score := range best {
+		ranked = append(ranked, labelScore{label, score})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].label < ranked[j].label
+	})
+
+	parts := make([]string, 0, len(ranked))
+	for _, r := range ranked {
+		parts = append(parts, fmt.Sprintf("%s %d%%", titleCaseLabel(r.label), int(r.score*100+0.5)))
+	}
+
+	// Recognized attributes (face identity, plate text, classifier label),
+	// de-duplicated, appended after the object summary.
+	seen := map[string]struct{}{}
+	var attrs []string
+	for _, seg := range event.Segments {
+		for _, a := range seg.Attributes {
+			if a.Label == "" {
+				continue
+			}
+			if _, ok := seen[a.Label]; ok {
+				continue
+			}
+			seen[a.Label] = struct{}{}
+			attrs = append(attrs, a.Label)
+		}
+	}
+
+	summary := strings.Join(parts, ", ")
+	if len(attrs) > 0 {
+		if summary != "" {
+			summary += " · "
+		}
+		summary += strings.Join(attrs, ", ")
+	}
+	return summary
 }
 
 // isTerminalEvent reports whether event has reached its terminal lifecycle
