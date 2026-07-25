@@ -76,6 +76,9 @@ func TestDetectionEventIngester_Notify_ObjectEventTerminalMessagePublishesOnce(t
 	if n.Data["cameraId"] != "cam1" || n.Data["eventId"] != "evt-1" {
 		t.Errorf("expected Data to carry cameraId=cam1 eventId=evt-1, got %+v", n.Data)
 	}
+	if want := "/cameras/cam1?startTs=1000"; n.DeepLink != want {
+		t.Errorf("expected DeepLink %q, got %q", want, n.DeepLink)
+	}
 }
 
 // TestDetectionEventIngester_Notify_MotionOnlyEventNeverPublishes proves a

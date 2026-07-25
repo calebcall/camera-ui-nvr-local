@@ -352,6 +352,7 @@ func (i *detectionEventIngester) notify(event sdk.DetectionEvent) {
 		Title:     fmt.Sprintf("%s — %s", cameraTitle, titleCaseLabel(store.PrimaryLabel(event))),
 		Severity:  sdk.SeverityInfo,
 		Thumbnail: event.Thumbnail,
+		DeepLink:  fmt.Sprintf("/cameras/%s?startTs=%d", event.CameraID, event.StartTime),
 		Data: map[string]string{
 			"cameraId": event.CameraID,
 			"eventId":  event.ID,
