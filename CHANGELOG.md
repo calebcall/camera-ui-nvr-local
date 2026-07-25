@@ -5,6 +5,35 @@ All notable changes to **NVR (Local)** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Versioning note:** the package version tracks the **5.x line** deliberately — it must stay at or
+> above the closed `@camera.ui/camera-ui-nvr` release published to npm, so camera.ui's plugin
+> auto-updater never replaces this local build with the license-gated original. The jump from
+> `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
+
+## [5.2.0] - 2026-07-25
+
+### Added
+
+- **Runtime recorder reconcile.** A periodic pass re-reads each managed camera's stored recording
+  config and starts/stops recorders to match, so adding, re-adding, or reconfiguring a camera at
+  runtime takes effect without a plugin restart (also retries a camera whose stream wasn't ready
+  when it was first added).
+- **Notification deep link & body.** Object-detection notifications now carry a `DeepLink`
+  (`/cameras/<camera-name>?startTs=<ms>`) so a tap opens the right camera at the event time, and a
+  body summarizing the detected objects by confidence plus any recognized face/plate
+  (e.g. `Person 94%, Vehicle 81% · Caleb`).
+
+### Fixed
+
+- **Blank camera timeline.** Event slices (`triggers`, `segments`, and each segment's
+  `detections`/`attributes`) are now serialized as `[]` rather than `null`. The closed frontend
+  timeline dereferences these with no null guards, so a `null` (e.g. a motion event's empty
+  segments) threw and blanked the entire timeline — no activity markers or coverage.
+- **Notification deep link target.** The link now uses the camera's display **name**, not its id —
+  the `/cameras/:cameraname` route resolves by name, so a UUID produced a "camera not exists" error.
+- **Build tooling.** Reconciled `package-lock.json` so `npm ci` / `cui bundle` work from a clean
+  checkout (the copied lockfile referenced non-existent per-platform binary packages).
+
 ## [0.1.0] - 2026-07-21
 
 Initial release — an open-source, fully-local, drop-in replacement for the closed-source
@@ -59,4 +88,5 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
-[0.1.0]: https://github.com/calebcall/plugins/tree/nvr-plugin/camera-ui-nvr-local
+[5.2.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.2.0
+[0.1.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v0.1.0
