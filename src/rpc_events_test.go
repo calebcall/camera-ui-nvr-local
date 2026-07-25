@@ -281,3 +281,33 @@ func TestRPCMethods_IncludesEveryReadPathMethod(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeEventsResult_CoercesNilSlicesToEmpty locks in the fix for the
+// blank camera timeline: the closed frontend's event transform does
+// e.triggers.map(...), e.segments.length, and per-segment s.detections /
+// s.attributes with no null guards, and the SDK slices have no omitempty, so
+// a nil slice reaches the wire as JSON null and throws (which the timeline
+// swallows as "Failed to load events", rendering nothing). Every returned
+// event must carry [] not null for these.
+func TestNormalizeEventsResult_CoercesNilSlicesToEmpty(t *testing.T) {
+	motion := DetectionEvent{ID: "m1", CameraID: "cam", State: sdk.DetectionEventStateEnded} // nil Triggers + nil Segments
+	object := DetectionEvent{
+		ID: "o1", CameraID: "cam", State: sdk.DetectionEventStateEnded,
+		Segments: []sdk.EventSegment{{FirstSeen: 1, LastSeen: 2}}, // nil Detections + nil Attributes
+	}
+
+	out := normalizeEventsResult(GetEventsResult{Events: []DetectionEvent{motion, object}})
+
+	if out.Events[0].Triggers == nil {
+		t.Errorf("motion event Triggers must be non-nil ([]), got nil")
+	}
+	if out.Events[0].Segments == nil {
+		t.Errorf("motion event Segments must be non-nil ([]), got nil")
+	}
+	if out.Events[1].Segments[0].Detections == nil {
+		t.Errorf("segment Detections must be non-nil ([]), got nil")
+	}
+	if out.Events[1].Segments[0].Attributes == nil {
+		t.Errorf("segment Attributes must be non-nil ([]), got nil")
+	}
+}

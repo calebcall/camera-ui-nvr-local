@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	sdk "github.com/cameraui/sdk/go"
 )
 
 // heatmapEventFetchLimit bounds how many events GetDetectionHeatmap asks
@@ -72,6 +74,31 @@ func (p *NVRPlugin) GetCameraEvents(cameraIDs []string, opts GetEventsOptions) (
 func normalizeEventsResult(r GetEventsResult) GetEventsResult {
 	if r.Events == nil {
 		r.Events = []DetectionEvent{}
+	}
+	// The closed frontend's timeline transforms each event with NO null
+	// guards: it calls e.triggers.map(...), reads e.segments.length, and
+	// iterates s.detections / s.attributes per segment. The SDK's msgpack
+	// tags for these slices have NO omitempty, so a nil slice serializes as
+	// JSON null (not []) — and null.length / null.map throw. The timeline
+	// catches that as "Failed to load events" and then renders NOTHING (no
+	// activity markers). A single motion event (which has no Segments, so
+	// Segments is nil) is enough to blank the whole timeline. Coerce every
+	// such slice to a non-nil empty slice so the wire carries [] not null.
+	for i := range r.Events {
+		if r.Events[i].Triggers == nil {
+			r.Events[i].Triggers = []sdk.EventTrigger{}
+		}
+		if r.Events[i].Segments == nil {
+			r.Events[i].Segments = []sdk.EventSegment{}
+		}
+		for j := range r.Events[i].Segments {
+			if r.Events[i].Segments[j].Detections == nil {
+				r.Events[i].Segments[j].Detections = []sdk.EventDetection{}
+			}
+			if r.Events[i].Segments[j].Attributes == nil {
+				r.Events[i].Segments[j].Attributes = []sdk.EventAttribute{}
+			}
+		}
 	}
 	return r
 }
