@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"sync"
 	"unicode"
 
@@ -352,7 +353,11 @@ func (i *detectionEventIngester) notify(event sdk.DetectionEvent) {
 		Title:     fmt.Sprintf("%s — %s", cameraTitle, titleCaseLabel(store.PrimaryLabel(event))),
 		Severity:  sdk.SeverityInfo,
 		Thumbnail: event.Thumbnail,
-		DeepLink:  fmt.Sprintf("/cameras/%s?startTs=%d", event.CameraID, event.StartTime),
+		// The camera.ui route is /cameras/:cameraname and resolves by the
+		// camera's display NAME (not its id) — a UUID here yields "camera not
+		// exists". cameraTitle is that resolved name (falling back to the id
+		// only when no name is known); PathEscape handles names with spaces.
+		DeepLink:  fmt.Sprintf("/cameras/%s?startTs=%d", url.PathEscape(cameraTitle), event.StartTime),
 		Data: map[string]string{
 			"cameraId": event.CameraID,
 			"eventId":  event.ID,

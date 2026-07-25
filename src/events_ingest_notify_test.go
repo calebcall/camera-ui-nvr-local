@@ -76,7 +76,9 @@ func TestDetectionEventIngester_Notify_ObjectEventTerminalMessagePublishesOnce(t
 	if n.Data["cameraId"] != "cam1" || n.Data["eventId"] != "evt-1" {
 		t.Errorf("expected Data to carry cameraId=cam1 eventId=evt-1, got %+v", n.Data)
 	}
-	if want := "/cameras/cam1?startTs=1000"; n.DeepLink != want {
+	// DeepLink uses the camera NAME (the /cameras/:cameraname route resolves
+	// by name, not id), URL-escaped — "cam1" resolves to "Sideyard" here.
+	if want := "/cameras/Sideyard?startTs=1000"; n.DeepLink != want {
 		t.Errorf("expected DeepLink %q, got %q", want, n.DeepLink)
 	}
 }
