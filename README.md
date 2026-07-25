@@ -176,6 +176,3 @@ go test ./src/... -race -count=2  # race detector
 ## License
 
 [MIT](./LICENSE.md).
-
-The `logo.png` is reused from the official NVR plugin for visual continuity in the plugin list; all
-plugin code here is original and independently implemented.
