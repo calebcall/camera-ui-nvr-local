@@ -10,10 +10,6 @@
 
 ## Why this exists
 
-camera.ui's official NVR backend (`@camera.ui/camera-ui-nvr`) is closed-source and performs an
-online **license check**. When the host can't reach the internet, the NVR stops working —
-recording, timeline, and playback all go dark.
-
 This plugin is a **drop-in, open-source replacement** for that backend. It implements the same
 frontend contract, so the existing (unmodified) camera.ui web/mobile UI talks to it directly, but
 everything runs locally:
@@ -45,7 +41,7 @@ True **background push** to the camera.ui mobile app is *not* possible locally: 
 through camera.ui's own proprietary FCM/APNs cloud relay, which we neither have credentials for nor
 can replicate. If you want real background push without that cloud, the local option is a
 self-hosted push service (e.g. [ntfy](https://ntfy.sh) or [Gotify](https://gotify.net/)) delivered
-to *that* app — not implemented here yet.
+to *that* app — not implemented here.
 
 ## Important: the package name
 
