@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	sdk "github.com/cameraui/sdk/go"
@@ -45,9 +46,12 @@ func TestStorageSchema_AIDescriptionFields_AreDeclaredWithMatchingDefaults(t *te
 		wantDef any
 	}{
 		{describe.KeyEnabled, sdk.JsonSchemaTypeBoolean, false},
-		{describe.KeyBaseURL, sdk.JsonSchemaTypeString, describe.DefaultBaseURL},
+		{describe.KeyProvider, sdk.JsonSchemaTypeString, describe.DefaultProvider},
+		{describe.KeyBaseURL, sdk.JsonSchemaTypeString, describe.DefaultOllamaBaseURL},
 		{describe.KeyAPIKey, sdk.JsonSchemaTypeString, nil},
-		{describe.KeyModel, sdk.JsonSchemaTypeString, describe.DefaultModel},
+		{describe.KeyModelOpenAI, sdk.JsonSchemaTypeString, describe.DefaultModelOpenAI},
+		{describe.KeyModelGemini, sdk.JsonSchemaTypeString, describe.DefaultModelGemini},
+		{describe.KeyModelOllama, sdk.JsonSchemaTypeString, describe.DefaultModelOllama},
 		{describe.KeyFrameCount, sdk.JsonSchemaTypeNumber, float64(describe.DefaultFrameCount)},
 		{describe.KeyLabels, sdk.JsonSchemaTypeString, nil},
 		{describe.KeyMinConfidence, sdk.JsonSchemaTypeNumber, float64(0)},
@@ -86,7 +90,8 @@ func TestStorageSchema_AIFields_AreGatedBehindTheEnableToggle(t *testing.T) {
 	schemas := p.StorageSchema()
 
 	gated := []string{
-		describe.KeyBaseURL, describe.KeyAPIKey, describe.KeyModel,
+		describe.KeyProvider, describe.KeyBaseURL, describe.KeyAPIKey,
+		describe.KeyModelOpenAI, describe.KeyModelGemini, describe.KeyModelOllama,
 		describe.KeyFrameCount, describe.KeyLabels, describe.KeyMinConfidence,
 		describe.KeyTimeoutSeconds, describe.KeyQueueDepth,
 	}
@@ -110,19 +115,152 @@ func TestStorageSchema_AIFields_AreGatedBehindTheEnableToggle(t *testing.T) {
 	}
 }
 
-// TestStorageSchema_AIFields_ShareOneGroup keeps the nine new fields collapsed
-// into a single section of /settings/recordings rather than sprawling down the
-// page among the existing recording settings.
+// TestStorageSchema_AIFields_ShareOneGroup keeps the AI fields collapsed into a
+// single tab of /settings/recordings rather than sprawling down the page among
+// the existing recording settings.
 func TestStorageSchema_AIFields_ShareOneGroup(t *testing.T) {
 	p := &NVRPlugin{}
 	schemas := p.StorageSchema()
 	for _, key := range []string{
-		describe.KeyEnabled, describe.KeyBaseURL, describe.KeyAPIKey, describe.KeyModel,
+		describe.KeyEnabled, describe.KeyProvider, describe.KeyBaseURL, describe.KeyAPIKey,
+		describe.KeyModelOpenAI, describe.KeyModelGemini, describe.KeyModelOllama,
 		describe.KeyFrameCount, describe.KeyLabels, describe.KeyMinConfidence,
 		describe.KeyTimeoutSeconds, describe.KeyQueueDepth,
 	} {
-		if got := schemaByKey(t, schemas, key).Group; got != aiDescriptionsGroup {
-			t.Errorf("%s Group = %q, want %q", key, got, aiDescriptionsGroup)
+		if got := schemaByKey(t, schemas, key).Group; got != genAIGroup {
+			t.Errorf("%s Group = %q, want %q", key, got, genAIGroup)
+		}
+	}
+}
+
+// TestStorageSchema_EveryVisibleField_CarriesAGroup is the load-bearing test for
+// the tabbed layout. The frontend (CuiSchema.vue) renders one tab per distinct
+// non-empty group and renders every UNGROUPED non-hidden field loose beneath the
+// whole tab strip. So a field that forgets its group does not fail visibly in any
+// test that only checks its own properties — it just quietly reappears stranded
+// under the tabs, which is precisely the layout this change exists to fix.
+//
+// Hidden fields are exempt: CuiSchema excludes them from both the tab strip and
+// the ungrouped list, so grouping instanceId would only risk creating a tab with
+// nothing visible in it.
+func TestStorageSchema_EveryVisibleField_CarriesAGroup(t *testing.T) {
+	p := &NVRPlugin{}
+	for _, s := range p.StorageSchema() {
+		if s.Hidden {
+			continue
+		}
+		if s.Group == "" {
+			t.Errorf("%s (%s) has no Group; it would render stranded below the tab strip", s.Key, s.Type)
+		}
+	}
+}
+
+// TestStorageSchema_GroupOrder_PutsStorageFirst pins the tab order, which the
+// frontend derives from declaration order rather than from anything explicit
+// (CuiSchema.vue's groupTabs appends each group the first time it is seen). It
+// also selects the first group as the default tab, so this is what decides which
+// tab a user actually lands on.
+//
+// Storage first is deliberate: it is the tab that matters on every install,
+// whereas GenAI is opt-in and off by default. Reordering the fields would
+// silently reorder the tabs, so this asserts the whole sequence rather than just
+// the first entry.
+func TestStorageSchema_GroupOrder_PutsStorageFirst(t *testing.T) {
+	p := &NVRPlugin{}
+
+	var groups []string
+	for _, s := range p.StorageSchema() {
+		if s.Hidden || s.Group == "" {
+			continue
+		}
+		if len(groups) == 0 || groups[len(groups)-1] != s.Group {
+			if !slices.Contains(groups, s.Group) {
+				groups = append(groups, s.Group)
+			}
+		}
+	}
+
+	want := []string{storageGroup, genAIGroup}
+	if !slices.Equal(groups, want) {
+		t.Errorf("tab order = %v, want %v", groups, want)
+	}
+}
+
+// TestStorageSchema_ProviderScopedFields_AreGatedOnTheProvider covers the
+// provider-conditional half of the form: the base URL and each model field must
+// be visible for exactly one provider.
+//
+// Both conditions matter and both are asserted. Dropping the enabled condition
+// would expose these on an install that never turned the feature on; dropping
+// the provider condition would show all three model fields at once, each
+// labelled "Model", which is worse than the single shared field this replaced.
+func TestStorageSchema_ProviderScopedFields_AreGatedOnTheProvider(t *testing.T) {
+	p := &NVRPlugin{}
+	schemas := p.StorageSchema()
+
+	for _, tc := range []struct {
+		key          string
+		wantProvider string
+	}{
+		{describe.KeyBaseURL, describe.ProviderOllama},
+		{describe.KeyModelOpenAI, describe.ProviderOpenAI},
+		{describe.KeyModelGemini, describe.ProviderGemini},
+		{describe.KeyModelOllama, describe.ProviderOllama},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			s := schemaByKey(t, schemas, tc.key)
+			if len(s.Condition) != 2 {
+				t.Fatalf("Condition = %+v, want exactly 2 (enabled AND provider)", s.Condition)
+			}
+
+			var sawEnabled, sawProvider bool
+			for _, c := range s.Condition {
+				switch c.Key {
+				case describe.KeyEnabled:
+					sawEnabled = true
+					if c.Value != true {
+						t.Errorf("enabled condition value = %v, want true", c.Value)
+					}
+				case describe.KeyProvider:
+					sawProvider = true
+					if c.Value != tc.wantProvider {
+						t.Errorf("provider condition value = %v, want %q", c.Value, tc.wantProvider)
+					}
+				default:
+					t.Errorf("unexpected condition key %q", c.Key)
+				}
+			}
+			if !sawEnabled || !sawProvider {
+				t.Errorf("Condition = %+v, want one on %q and one on %q", s.Condition, describe.KeyEnabled, describe.KeyProvider)
+			}
+		})
+	}
+}
+
+// TestStorageSchema_Provider_OffersExactlyTheSupportedProviders keeps the
+// dropdown and the resolver in agreement. An enum value describe.Load does not
+// recognize would silently fall back to OpenAI — i.e. a user could pick
+// something and get billed by someone else entirely.
+func TestStorageSchema_Provider_OffersExactlyTheSupportedProviders(t *testing.T) {
+	p := &NVRPlugin{}
+	s := schemaByKey(t, p.StorageSchema(), describe.KeyProvider)
+
+	want := []string{describe.ProviderOpenAI, describe.ProviderOllama, describe.ProviderGemini}
+	if !slices.Equal(s.Enum, want) {
+		t.Errorf("Enum = %v, want %v", s.Enum, want)
+	}
+}
+
+// TestStorageSchema_LegacyModelKey_IsNotDeclared guards the one-way nature of
+// the legacy key. describe.KeyModel is still READ as an upgrade fallback, but
+// declaring it here would put a second field labelled "Model" on the form and
+// let the frontend write to it, resurrecting exactly the shared-model-across-
+// providers problem the per-provider keys exist to prevent.
+func TestStorageSchema_LegacyModelKey_IsNotDeclared(t *testing.T) {
+	p := &NVRPlugin{}
+	for _, s := range p.StorageSchema() {
+		if s.Key == describe.KeyModel {
+			t.Errorf("legacy key %q must not be declared in the schema; it is read-only for upgrades", describe.KeyModel)
 		}
 	}
 }
@@ -152,8 +290,8 @@ func TestStorageSchema_TestConnectionButton_IsWiredToAHandler(t *testing.T) {
 			if s.OnClick == nil {
 				t.Error("the submit field has no OnClick handler")
 			}
-			if s.Group != aiDescriptionsGroup {
-				t.Errorf("submit Group = %q, want %q", s.Group, aiDescriptionsGroup)
+			if s.Group != genAIGroup {
+				t.Errorf("submit Group = %q, want %q", s.Group, genAIGroup)
 			}
 			if len(s.Condition) == 0 || s.Condition[0].Key != describe.KeyEnabled {
 				t.Errorf("submit Condition = %+v, want it gated behind %q", s.Condition, describe.KeyEnabled)
