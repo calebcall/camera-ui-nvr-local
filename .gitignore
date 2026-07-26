@@ -26,3 +26,5 @@ __pycache__
 .venv
 .tmp
 /templates
+superpowers
+.superpowers
