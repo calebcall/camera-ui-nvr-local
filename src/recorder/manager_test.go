@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -8,26 +9,34 @@ import (
 )
 
 // fakeCameraStorage is an in-memory stand-in for a camera's
-// *sdk.DeviceStorage. It mirrors the one behavior RecorderManager depends
-// on: DefineSchemas seeds a key's default value the first time it's
-// declared, without clobbering a value already present (matching
-// sdk.DeviceStorage.DefineSchemas's merge-with-existing-values behavior in
-// storage.go).
+// *sdk.DeviceStorage. It mirrors the two behaviors RecorderManager depends on:
+// AddSchema seeds a key's default value without clobbering a value already
+// present, and HasSchema reports whether a key was ever declared.
+//
+// Tracking declared keys SEPARATELY from values is what makes this a faithful
+// fake rather than a convenient one: a key can be declared while holding no
+// value (DefaultValue nil), and conflating the two would hide a double-declare
+// bug that the real DeviceStorage.AddSchema rejects.
 type fakeCameraStorage struct {
-	values map[string]any
+	values   map[string]any
+	declared map[string]bool
 }
 
 func newFakeCameraStorage() *fakeCameraStorage {
-	return &fakeCameraStorage{values: make(map[string]any)}
+	return &fakeCameraStorage{values: make(map[string]any), declared: make(map[string]bool)}
 }
 
-func (f *fakeCameraStorage) DefineSchemas(schemas []sdk.JsonSchema) {
-	for _, schema := range schemas {
-		if _, exists := f.values[schema.Key]; exists || schema.DefaultValue == nil {
-			continue
-		}
+func (f *fakeCameraStorage) HasSchema(key string) bool { return f.declared[key] }
+
+func (f *fakeCameraStorage) AddSchema(schema *sdk.JsonSchema) error {
+	if f.declared[schema.Key] {
+		return fmt.Errorf("schema with key %s already exists", schema.Key)
+	}
+	f.declared[schema.Key] = true
+	if _, exists := f.values[schema.Key]; !exists && schema.DefaultValue != nil {
 		f.values[schema.Key] = schema.DefaultValue
 	}
+	return nil
 }
 
 func (f *fakeCameraStorage) GetValue(key string, defaultValue ...any) any {
@@ -300,7 +309,7 @@ func TestRecordingConfigSchema_RolesHasDefaultValue(t *testing.T) {
 // its actual SourceRoles) without needing the full manager start path.
 func TestResolveRoles(t *testing.T) {
 	cases := []struct {
-		name                 string
+		name                        string
 		configured, available, want []string
 	}{
 		{
@@ -329,5 +338,59 @@ func TestResolveRoles(t *testing.T) {
 				t.Fatalf("resolveRoles(%v, %v) = %v, want %v", c.configured, c.available, got, c.want)
 			}
 		})
+	}
+}
+
+// TestReadRecordingConfig_DoesNotClobberSchemasDeclaredElsewhere is a
+// regression test for a hazard that would otherwise be invisible until a user
+// noticed settings missing from a form.
+//
+// A camera's storage scope is shared by everything this plugin declares for
+// that camera. sdk.DeviceStorage.DefineSchemas REPLACES the whole schema list,
+// and readRecordingConfig runs on every reconcile tick — so if it used
+// DefineSchemas, any field declared by the parent package (notification
+// overrides today, faces or per-camera AI settings later) would survive only
+// until the next tick and then silently vanish.
+func TestReadRecordingConfig_DoesNotClobberSchemasDeclaredElsewhere(t *testing.T) {
+	storage := newFakeCameraStorage()
+
+	// Something else in the plugin declares a field on this same camera first.
+	foreign := sdk.JsonSchema{Type: sdk.JsonSchemaTypeBoolean, Key: "notifyOverride", DefaultValue: true}
+	if err := storage.AddSchema(&foreign); err != nil {
+		t.Fatalf("seed foreign schema: %v", err)
+	}
+
+	// Several reads, as the reconcile ticker would produce.
+	for i := 0; i < 3; i++ {
+		readRecordingConfig(storage)
+	}
+
+	if !storage.HasSchema("notifyOverride") {
+		t.Error("a schema declared outside this package was wiped by readRecordingConfig")
+	}
+	if got := storage.GetValue("notifyOverride", nil); got != true {
+		t.Errorf("foreign key value = %v, want true", got)
+	}
+	// Its own fields must still be there too.
+	if !storage.HasSchema(keyRecordingMode) {
+		t.Error("recordingMode schema missing after read")
+	}
+}
+
+// TestReadRecordingConfig_RepeatedReadsDeclareOnce guards against re-declaring
+// on every tick, which with AddSchema would mean an error (and, in the real
+// DeviceStorage, a persist) on every reconcile pass forever.
+func TestReadRecordingConfig_RepeatedReadsDeclareOnce(t *testing.T) {
+	storage := newFakeCameraStorage()
+
+	readRecordingConfig(storage)
+	before := len(storage.declared)
+
+	for i := 0; i < 5; i++ {
+		readRecordingConfig(storage)
+	}
+
+	if after := len(storage.declared); after != before {
+		t.Errorf("declared key count went %d -> %d across repeated reads", before, after)
 	}
 }

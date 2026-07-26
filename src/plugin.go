@@ -199,6 +199,12 @@ type NVRPlugin struct {
 	// exactly the released camera (see events_ingest.go).
 	detectionSubs detectionSubscriptions
 
+	// cameraNotify holds each attached camera's own settings storage, backing
+	// the per-camera notification overrides (notify_filter.go). Populated in
+	// attachDetectionIngestion and cleared in OnCameraReleased. A camera absent
+	// from it simply follows the plugin-wide toggles.
+	cameraNotify cameraNotifyRegistry
+
 	// recorders backs detectionEventIngester's eventRecorderLookup
 	// (events_ingest.go), letting DetectionEvent ingestion call MarkEvent on
 	// the camera's live recorder when one is registered. Zero value is
@@ -1159,6 +1165,7 @@ func (p *NVRPlugin) OnCameraAdded(camera *sdk.CameraDevice) error {
 
 func (p *NVRPlugin) OnCameraReleased(cameraID string) error {
 	p.detectionSubs.remove(cameraID)
+	p.cameraNotify.remove(cameraID)
 	p.recorders.Remove(cameraID)
 	return p.recorder.Remove(cameraID)
 }
@@ -1349,6 +1356,14 @@ func (p *NVRPlugin) attachDetectionIngestion(cam *sdk.CameraDevice) {
 	// sharing, and p.store is available whether or not the database opened.
 	// Nothing suppresses notifications until a user turns a type off, since
 	// every toggle defaults to true.
-	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, newNotifyLabelFilter(p.store), p.Logger)
+	// Register this camera's own storage before building the ingester, so its
+	// override schema exists (and so the first event for it can already resolve
+	// an override). cam.Storage() is created by the SDK in CameraDevice.init
+	// for every camera we are handed, and is scoped per plugin AND per camera,
+	// so declaring on it cannot collide with a camera-provider plugin's schema
+	// for the same camera.
+	p.cameraNotify.add(cam.ID(), cam.Storage())
+
+	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, newNotifyLabelFilter(p.store, &p.cameraNotify), p.Logger)
 	p.detectionSubs.add(cam.ID(), cam.OnDetectionEvent(ingester.handle))
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	sdk "github.com/cameraui/sdk/go"
@@ -105,7 +106,10 @@ func TestGetManagedCameraIds_EmptyByDefault(t *testing.T) {
 // recorder itself; these are duplicated here (rather than exported from
 // recorder) because plugin_rpc_test.go, in package main, cannot reach
 // recorder's unexported test-only types.
-type fakeManagedCameraStorage struct{ values map[string]any }
+type fakeManagedCameraStorage struct {
+	values   map[string]any
+	declared map[string]bool
+}
 
 func (f *fakeManagedCameraStorage) GetValue(key string, defaultValue ...any) any {
 	if v, ok := f.values[key]; ok {
@@ -117,13 +121,20 @@ func (f *fakeManagedCameraStorage) GetValue(key string, defaultValue ...any) any
 	return nil
 }
 
-func (f *fakeManagedCameraStorage) DefineSchemas(schemas []sdk.JsonSchema) {
-	for _, schema := range schemas {
-		if _, exists := f.values[schema.Key]; exists || schema.DefaultValue == nil {
-			continue
-		}
+func (f *fakeManagedCameraStorage) HasSchema(key string) bool { return f.declared[key] }
+
+func (f *fakeManagedCameraStorage) AddSchema(schema *sdk.JsonSchema) error {
+	if f.declared == nil {
+		f.declared = make(map[string]bool)
+	}
+	if f.declared[schema.Key] {
+		return fmt.Errorf("schema with key %s already exists", schema.Key)
+	}
+	f.declared[schema.Key] = true
+	if _, exists := f.values[schema.Key]; !exists && schema.DefaultValue != nil {
 		f.values[schema.Key] = schema.DefaultValue
 	}
+	return nil
 }
 
 type fakeManagedCamera struct {

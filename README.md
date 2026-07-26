@@ -205,12 +205,22 @@ Three things worth knowing:
 - **There is no Motion or Audio toggle**, because motion-only and audio-only events never produce a
   notification in the first place — such a switch would do nothing.
 
-> **Want this per camera?** These toggles are plugin-wide: the camera.ui plugin API exposes only
-> plugin-level settings, with no per-camera hook. For per-camera rules, use camera.ui **automations**
-> instead — a *detection* trigger filters on a specific camera plus specific labels (and a confidence
-> floor, faces, or plates) and feeds a *notification* action. If you go that route, switch this plugin
-> off as a notification source under Settings → Notifications first, or you'll get both notifications.
-> The trade-off is that you rebuild the body and deep link yourself, which this plugin does for you.
+#### Per-camera overrides
+
+The toggles above are the default for every camera. To give one camera its own, open that camera's
+**drawer → Plugins tab → NVR (Local)** — the same place its recording mode and retention live — and
+turn on **Override notification settings**. Five per-camera toggles appear; while the override is off,
+the camera follows the global settings.
+
+Overrides *replace* the global settings for that camera rather than narrowing them, so a camera can
+also be **more** permissive — you can disable Vehicle globally and re-enable it on the one camera
+watching the driveway.
+
+> **Want rules finer than per-camera-per-type?** camera.ui **automations** go further: a *detection*
+> trigger filters on a camera plus specific labels, a confidence floor, specific faces, or specific
+> plates, feeding a *notification* action. If you go that route, switch this plugin off as a
+> notification source under Settings → Notifications first, or you'll get both notifications. The
+> trade-off is that you rebuild the body and deep link yourself, which this plugin does for you.
 
 ### AI event descriptions
 

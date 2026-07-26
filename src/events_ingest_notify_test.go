@@ -253,7 +253,7 @@ func TestNotify_FilterSuppressesDisabledDetectionType(t *testing.T) {
 			notifier := &fakeNotifier{}
 			i := newDetectionEventIngester(
 				&fakeEventStore{}, nil, nil, nil, notifier, nil, nil,
-				newNotifyLabelFilter(tc.settings), nil,
+				newNotifyLabelFilter(tc.settings, nil), nil,
 			)
 
 			ended := labelEvent(tc.labels...)
@@ -279,7 +279,7 @@ func TestNotify_FilterRunsBeforeDedup(t *testing.T) {
 	settings := notifyStore{notifyVehicleKey: false}
 	i := newDetectionEventIngester(
 		&fakeEventStore{}, nil, nil, nil, notifier, nil, nil,
-		newNotifyLabelFilter(settings), nil,
+		newNotifyLabelFilter(settings, nil), nil,
 	)
 
 	ended := labelEvent("vehicle")

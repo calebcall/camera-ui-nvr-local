@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	sdk "github.com/cameraui/sdk/go"
@@ -43,7 +44,7 @@ func labelEvent(labels ...string) store.DetectionEvent {
 }
 
 func TestNotifyLabelFilter_NothingStored_AllowsEveryLabel(t *testing.T) {
-	f := newNotifyLabelFilter(notifyStore{})
+	f := newNotifyLabelFilter(notifyStore{}, nil)
 
 	for _, label := range []string{"person", "vehicle", "animal", "package", "bird"} {
 		t.Run(label, func(t *testing.T) {
@@ -65,7 +66,7 @@ func TestNotifyLabelFilter_DisabledLabel_IsSuppressed(t *testing.T) {
 		{"package", notifyPackageKey},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			f := newNotifyLabelFilter(notifyStore{tc.key: false})
+			f := newNotifyLabelFilter(notifyStore{tc.key: false}, nil)
 
 			if f.NotifyAllowed(labelEvent(tc.label)) {
 				t.Errorf("%q notified with %s=false", tc.label, tc.key)
@@ -90,7 +91,7 @@ func TestNotifyLabelFilter_DisabledLabel_IsSuppressed(t *testing.T) {
 // carrying both labels; someone who turned Vehicle off did so to stop being
 // pinged about passing traffic, not to stop being told a person showed up.
 func TestNotifyLabelFilter_AnyEnabledLabel_Allows(t *testing.T) {
-	f := newNotifyLabelFilter(notifyStore{notifyVehicleKey: false})
+	f := newNotifyLabelFilter(notifyStore{notifyVehicleKey: false}, nil)
 
 	if !f.NotifyAllowed(labelEvent("person", "vehicle")) {
 		t.Error("a person+vehicle event was suppressed because vehicle is off; any enabled label should allow it")
@@ -107,7 +108,7 @@ func TestNotifyLabelFilter_EveryLabelDisabled_SuppressesEverything(t *testing.T)
 		notifyAnimalKey:  false,
 		notifyPackageKey: false,
 		notifyOtherKey:   false,
-	})
+	}, nil)
 
 	for _, labels := range [][]string{
 		{"person"}, {"vehicle"}, {"animal"}, {"package"}, {"bird"},
@@ -125,10 +126,10 @@ func TestNotifyLabelFilter_EveryLabelDisabled_SuppressesEverything(t *testing.T)
 func TestNotifyLabelFilter_ClassifierLabel_IsGovernedByOther(t *testing.T) {
 	for _, label := range []string{"bird", "raccoon", "rain", "delivery_van"} {
 		t.Run(label, func(t *testing.T) {
-			if newNotifyLabelFilter(notifyStore{notifyOtherKey: false}).NotifyAllowed(labelEvent(label)) {
+			if newNotifyLabelFilter(notifyStore{notifyOtherKey: false}, nil).NotifyAllowed(labelEvent(label)) {
 				t.Errorf("%q notified with %s=false", label, notifyOtherKey)
 			}
-			if !newNotifyLabelFilter(notifyStore{notifyOtherKey: true}).NotifyAllowed(labelEvent(label)) {
+			if !newNotifyLabelFilter(notifyStore{notifyOtherKey: true}, nil).NotifyAllowed(labelEvent(label)) {
 				t.Errorf("%q was suppressed with %s=true", label, notifyOtherKey)
 			}
 		})
@@ -140,7 +141,7 @@ func TestNotifyLabelFilter_ClassifierLabel_IsGovernedByOther(t *testing.T) {
 // would silence people too — which the label on the switch does not remotely
 // suggest.
 func TestNotifyLabelFilter_OtherToggle_DoesNotGovernKnownLabels(t *testing.T) {
-	f := newNotifyLabelFilter(notifyStore{notifyOtherKey: false})
+	f := newNotifyLabelFilter(notifyStore{notifyOtherKey: false}, nil)
 
 	for _, label := range []string{"person", "vehicle", "animal", "package"} {
 		if !f.NotifyAllowed(labelEvent(label)) {
@@ -158,7 +159,7 @@ func TestNotifyLabelFilter_NonSubjectTypes_AreIgnored(t *testing.T) {
 	// Person is off; the event also carries motion and a recognized face. It
 	// must stay suppressed — a face is an attribute OF the person, not an
 	// independent reason to notify.
-	f := newNotifyLabelFilter(notifyStore{notifyPersonKey: false})
+	f := newNotifyLabelFilter(notifyStore{notifyPersonKey: false}, nil)
 
 	ev := labelEvent("person")
 	ev.Types = []string{"person", "motion", "face"}
@@ -176,7 +177,7 @@ func TestNotifyLabelFilter_NonSubjectTypes_AreIgnored(t *testing.T) {
 		notifyAnimalKey:  false,
 		notifyPackageKey: false,
 		notifyOtherKey:   false,
-	})
+	}, nil)
 	nonSubject := store.DetectionEvent{ID: "ev-2", Types: []string{"motion", "audio", "doorbell", "face"}}
 	if !allOff.NotifyAllowed(nonSubject) {
 		t.Error("an event with no classifiable label was suppressed; unanticipated shapes must fail open")
@@ -187,7 +188,7 @@ func TestNotifyLabelFilter_NonSubjectTypes_AreIgnored(t *testing.T) {
 // extra notification for a shape we did not anticipate is recoverable; silent,
 // undiagnosable suppression is not.
 func TestNotifyLabelFilter_NoLabelsAtAll_Allows(t *testing.T) {
-	f := newNotifyLabelFilter(notifyStore{notifyPersonKey: false, notifyOtherKey: false})
+	f := newNotifyLabelFilter(notifyStore{notifyPersonKey: false, notifyOtherKey: false}, nil)
 
 	if !f.NotifyAllowed(store.DetectionEvent{ID: "ev-1"}) {
 		t.Error("an event with no types and no segments was suppressed; it must fail open")
@@ -199,7 +200,7 @@ func TestNotifyLabelFilter_NoLabelsAtAll_Allows(t *testing.T) {
 // either Types or the segment detections can be empty for an event that really
 // does have detections.
 func TestNotifyLabelFilter_ReadsEitherLabelSource(t *testing.T) {
-	f := newNotifyLabelFilter(notifyStore{notifyVehicleKey: false})
+	f := newNotifyLabelFilter(notifyStore{notifyVehicleKey: false}, nil)
 
 	typesOnly := store.DetectionEvent{ID: "ev-1", Types: []string{"vehicle"}}
 	if f.NotifyAllowed(typesOnly) {
@@ -216,7 +217,7 @@ func TestNotifyLabelFilter_ReadsEitherLabelSource(t *testing.T) {
 }
 
 func TestNotifyLabelFilter_LabelsAreNormalized(t *testing.T) {
-	f := newNotifyLabelFilter(notifyStore{notifyPersonKey: false})
+	f := newNotifyLabelFilter(notifyStore{notifyPersonKey: false}, nil)
 
 	for _, raw := range []string{"Person", "PERSON", "  person  ", "PeRsOn"} {
 		t.Run(raw, func(t *testing.T) {
@@ -233,7 +234,7 @@ func TestNotifyLabelFilter_LabelsAreNormalized(t *testing.T) {
 // fail-open decision here.
 func TestNotifyLabelFilter_NonBooleanStoredValue_FallsBackToAllowing(t *testing.T) {
 	for _, stored := range []any{"false", 0, nil, float64(0)} {
-		if !newNotifyLabelFilter(notifyStore{notifyPersonKey: stored}).NotifyAllowed(labelEvent("person")) {
+		if !newNotifyLabelFilter(notifyStore{notifyPersonKey: stored}, nil).NotifyAllowed(labelEvent("person")) {
 			t.Errorf("stored value %#v suppressed the notification; a non-bool must fail open", stored)
 		}
 	}
@@ -247,7 +248,223 @@ func TestNotifyLabelFilter_NilReceiverAndNilStore_Allow(t *testing.T) {
 	if !nilFilter.NotifyAllowed(labelEvent("person")) {
 		t.Error("a nil *notifyLabelFilter suppressed a notification")
 	}
-	if !newNotifyLabelFilter(nil).NotifyAllowed(labelEvent("person")) {
+	if !newNotifyLabelFilter(nil, nil).NotifyAllowed(labelEvent("person")) {
 		t.Error("a filter with a nil store suppressed a notification")
 	}
 }
+
+// fakeCameraNotifySettings resolves camera IDs to per-camera stores.
+type fakeCameraNotifySettings map[string]notifyStore
+
+func (f fakeCameraNotifySettings) CameraNotifySettings(cameraID string) (notifySettingsStore, bool) {
+	s, ok := f[cameraID]
+	if !ok {
+		return nil, false
+	}
+	return s, true
+}
+
+func camEvent(cameraID string, labels ...string) store.DetectionEvent {
+	ev := labelEvent(labels...)
+	ev.CameraID = cameraID
+	return ev
+}
+
+// TestNotifyLabelFilter_OverrideOff_FollowsGlobalSettings is the inheritance
+// default: a camera with settings storage but no override in effect must behave
+// exactly as it did before per-camera settings existed.
+func TestNotifyLabelFilter_OverrideOff_FollowsGlobalSettings(t *testing.T) {
+	global := notifyStore{notifyVehicleKey: false}
+	cameras := fakeCameraNotifySettings{
+		// The camera has its OWN vehicle=true, which must be ignored while the
+		// override flag is off.
+		"cam-1": notifyStore{notifyOverrideKey: false, notifyVehicleKey: true},
+	}
+	f := newNotifyLabelFilter(global, cameras)
+
+	if f.NotifyAllowed(camEvent("cam-1", "vehicle")) {
+		t.Error("camera used its own vehicle=true while override was off; global vehicle=false must win")
+	}
+	if !f.NotifyAllowed(camEvent("cam-1", "person")) {
+		t.Error("person was suppressed; global person is enabled")
+	}
+}
+
+// TestNotifyLabelFilter_OverrideOn_UsesCameraSettings is the point of the
+// feature, in both directions: a camera can be stricter than global AND more
+// permissive than it.
+func TestNotifyLabelFilter_OverrideOn_UsesCameraSettings(t *testing.T) {
+	t.Run("stricter than global", func(t *testing.T) {
+		f := newNotifyLabelFilter(
+			notifyStore{}, // everything on globally
+			fakeCameraNotifySettings{"cam-1": notifyStore{notifyOverrideKey: true, notifyPersonKey: false}},
+		)
+		if f.NotifyAllowed(camEvent("cam-1", "person")) {
+			t.Error("camera override person=false was ignored")
+		}
+	})
+
+	t.Run("more permissive than global", func(t *testing.T) {
+		f := newNotifyLabelFilter(
+			notifyStore{notifyVehicleKey: false}, // vehicles off globally
+			fakeCameraNotifySettings{"cam-1": notifyStore{notifyOverrideKey: true, notifyVehicleKey: true}},
+		)
+		if !f.NotifyAllowed(camEvent("cam-1", "vehicle")) {
+			t.Error("camera could not re-enable a type disabled globally; that is the reason overrides are not ANDed with global")
+		}
+	})
+}
+
+// TestNotifyLabelFilter_OverrideIsPerCamera checks that one camera's override
+// does not leak to another — the failure mode that would make this worse than
+// no feature at all.
+func TestNotifyLabelFilter_OverrideIsPerCamera(t *testing.T) {
+	f := newNotifyLabelFilter(
+		notifyStore{},
+		fakeCameraNotifySettings{
+			"cam-1": notifyStore{notifyOverrideKey: true, notifyPersonKey: false},
+			"cam-2": notifyStore{notifyOverrideKey: false},
+		},
+	)
+
+	if f.NotifyAllowed(camEvent("cam-1", "person")) {
+		t.Error("cam-1 override did not apply")
+	}
+	if !f.NotifyAllowed(camEvent("cam-2", "person")) {
+		t.Error("cam-1's override leaked to cam-2")
+	}
+	if !f.NotifyAllowed(camEvent("cam-unknown", "person")) {
+		t.Error("an unregistered camera did not fall back to global")
+	}
+}
+
+// TestNotifyLabelFilter_CameraResolutionFailures_FallBackToGlobal covers every
+// way resolution can come up empty. All of them must land on the global
+// settings rather than on "allow" or "deny" — this step only chooses WHICH
+// toggles apply.
+func TestNotifyLabelFilter_CameraResolutionFailures_FallBackToGlobal(t *testing.T) {
+	global := notifyStore{notifyVehicleKey: false}
+
+	for _, tc := range []struct {
+		name    string
+		cameras cameraNotifySettings
+	}{
+		{"nil lookup", nil},
+		{"camera not registered", fakeCameraNotifySettings{}},
+		{"override absent", fakeCameraNotifySettings{"cam-1": notifyStore{}}},
+		{"override non-bool", fakeCameraNotifySettings{"cam-1": notifyStore{notifyOverrideKey: "yes", notifyVehicleKey: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNotifyLabelFilter(global, tc.cameras)
+			if f.NotifyAllowed(camEvent("cam-1", "vehicle")) {
+				t.Error("resolution failure did not fall back to the global settings")
+			}
+		})
+	}
+}
+
+// TestNotifyLabelFilter_OverrideOn_UnsetCameraKeysDefaultToOn keeps an override
+// from being a silent mute. Turning the flag on with nothing else configured
+// must notify for everything, not nothing.
+func TestNotifyLabelFilter_OverrideOn_UnsetCameraKeysDefaultToOn(t *testing.T) {
+	f := newNotifyLabelFilter(
+		notifyStore{notifyPersonKey: false, notifyVehicleKey: false},
+		fakeCameraNotifySettings{"cam-1": notifyStore{notifyOverrideKey: true}},
+	)
+
+	for _, label := range []string{"person", "vehicle", "animal", "package", "bird"} {
+		if !f.NotifyAllowed(camEvent("cam-1", label)) {
+			t.Errorf("%q was suppressed on a camera whose override is on but has no toggles set", label)
+		}
+	}
+}
+
+// TestCameraNotifyRegistry_AddDeclaresSchemaAndResolves covers the registry
+// itself, including that a released camera stops resolving.
+func TestCameraNotifyRegistry_AddDeclaresSchemaAndResolves(t *testing.T) {
+	var r cameraNotifyRegistry
+	storage := newFakeCameraSettings()
+
+	r.add("cam-1", storage)
+
+	for _, key := range []string{
+		notifyOverrideKey, notifyPersonKey, notifyVehicleKey,
+		notifyAnimalKey, notifyPackageKey, notifyOtherKey,
+	} {
+		if !storage.HasSchema(key) {
+			t.Errorf("schema %q was not declared on the camera's storage", key)
+		}
+	}
+
+	if _, ok := r.CameraNotifySettings("cam-1"); !ok {
+		t.Error("cam-1 did not resolve after add")
+	}
+
+	r.remove("cam-1")
+	if _, ok := r.CameraNotifySettings("cam-1"); ok {
+		t.Error("cam-1 still resolves after remove; released cameras must not leak")
+	}
+}
+
+// TestCameraNotifyRegistry_AddIsIdempotent matters because OnCameraAdded can
+// fire more than once for the same camera, and AddSchema errors on a duplicate
+// key.
+func TestCameraNotifyRegistry_AddIsIdempotent(t *testing.T) {
+	var r cameraNotifyRegistry
+	storage := newFakeCameraSettings()
+
+	r.add("cam-1", storage)
+	declared := len(storage.declared)
+	r.add("cam-1", storage)
+
+	if got := len(storage.declared); got != declared {
+		t.Errorf("declared key count went %d -> %d on re-add", declared, got)
+	}
+	if _, ok := r.CameraNotifySettings("cam-1"); !ok {
+		t.Error("cam-1 stopped resolving after a second add")
+	}
+}
+
+func TestCameraNotifyRegistry_NilStorage_IsIgnored(t *testing.T) {
+	var r cameraNotifyRegistry
+	r.add("cam-1", nil) // must not panic
+
+	if _, ok := r.CameraNotifySettings("cam-1"); ok {
+		t.Error("a nil storage was registered; it must be ignored")
+	}
+}
+
+// fakeCameraSettings is an in-memory recorder.CameraStorage for registry tests.
+type fakeCameraSettings struct {
+	values   map[string]any
+	declared map[string]bool
+}
+
+func newFakeCameraSettings() *fakeCameraSettings {
+	return &fakeCameraSettings{values: map[string]any{}, declared: map[string]bool{}}
+}
+
+func (f *fakeCameraSettings) GetValue(key string, fallback ...any) any {
+	if v, ok := f.values[key]; ok {
+		return v
+	}
+	if len(fallback) > 0 {
+		return fallback[0]
+	}
+	return nil
+}
+
+func (f *fakeCameraSettings) HasSchema(key string) bool { return f.declared[key] }
+
+func (f *fakeCameraSettings) AddSchema(schema *sdk.JsonSchema) error {
+	if f.declared[schema.Key] {
+		return errDuplicateSchema
+	}
+	f.declared[schema.Key] = true
+	if _, exists := f.values[schema.Key]; !exists && schema.DefaultValue != nil {
+		f.values[schema.Key] = schema.DefaultValue
+	}
+	return nil
+}
+
+var errDuplicateSchema = errors.New("schema already exists")
