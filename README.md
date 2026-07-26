@@ -165,7 +165,8 @@ wrong (see [Important: the package name](#important-the-package-name)).
 ## Configuration
 
 Configured from the camera.ui **Settings → Recordings** page, under *Global Settings*. The settings
-are split into three tabs:
+are split into three tabs. The settings themselves are deliberately terse — the tables below are the
+reference for what each one does, rather than help text under every field:
 
 - **Storage** — where recordings go and how much disk they may use.
 - **Detections** — which detection types are worth a notification.
@@ -188,11 +189,11 @@ to **on**, so upgrading changes nothing until you turn something off.
 
 | Toggle (storage key)                   | Covers                                                                        |
 | -------------------------------------- | ----------------------------------------------------------------------------- |
-| Notify: Person (`notifyPerson`)         | `person` detections.                                                          |
-| Notify: Vehicle (`notifyVehicle`)       | `vehicle` detections. Usually the first one off for a road-facing camera.      |
-| Notify: Animal (`notifyAnimal`)         | `animal` detections — pets, wildlife.                                         |
-| Notify: Package (`notifyPackage`)       | `package` detections.                                                         |
-| Notify: Other detections (`notifyOther`) | Labels from classifier plugins outside the standard set (a bird, a weather condition). Without this they would be the one kind of detection you could not filter. |
+| Person (`notifyPerson`)                 | `person` detections.                                                          |
+| Vehicle (`notifyVehicle`)               | `vehicle` detections. Usually the first one off for a road-facing camera.      |
+| Animal (`notifyAnimal`)                 | `animal` detections — pets, wildlife.                                         |
+| Package (`notifyPackage`)               | `package` detections.                                                         |
+| Other (`notifyOther`)                    | Labels from classifier plugins outside the standard set (a bird, a weather condition). Without this they would be the one kind of detection you could not filter. |
 
 Three things worth knowing:
 
@@ -209,7 +210,7 @@ Three things worth knowing:
 
 The toggles above are the default for every camera. To give one camera its own, open that camera's
 **drawer → Plugins tab → NVR (Local)** — the same place its recording mode and retention live — and
-turn on **Override notification settings**. Five per-camera toggles appear; while the override is off,
+turn on **Override notifications**. Five per-camera toggles appear; while the override is off,
 the camera follows the global settings.
 
 Overrides *replace* the global settings for that camera rather than narrowing them, so a camera can
@@ -258,15 +259,15 @@ local model name you tuned — and never sends one provider's model to another.
 
 | Setting (storage key)                            | Default                     | Meaning                                                                                                                                                                                                                       |
 | ------------------------------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Enable AI Descriptions (`aiDescriptionsEnabled`) | off                         | Master switch. While it's off nothing is sampled, nothing is sent, and nothing is billed.                                                                                                                                       |
+| Enabled (`aiDescriptionsEnabled`) | off                         | Master switch. While it's off nothing is sampled, nothing is sent, and nothing is billed.                                                                                                                                       |
 | Provider (`aiProvider`)                          | `openai`                    | `openai`, `ollama`, or `gemini`. Determines the endpoint and which model field is shown.                                                                                                                                        |
-| Ollama Base URL (`aiBaseURL`)                    | `http://localhost:11434/v1` | **Ollama only.** Include the `/v1` suffix; a trailing slash is stripped for you. Ignored entirely by the hosted providers.                                                                                                      |
+| Base URL (`aiBaseURL`)                           | `http://localhost:11434/v1` | **Ollama only.** Include the `/v1` suffix; a trailing slash is stripped for you. Ignored entirely by the hosted providers.                                                                                                      |
 | API Key (`aiAPIKey`)                             | empty                       | Sent as `Authorization: Bearer …`. Required for OpenAI and Gemini; leave empty for a local Ollama and the header is omitted entirely. Rendered masked, but stored in the same plaintext plugin storage as every other setting.    |
 | Model (`aiModelOpenAI` / `aiModelGemini` / `aiModelOllama`) | per provider, above | Must be **vision-capable**. One field is shown, matching the selected provider; the other two keep their own values.                                                                                                            |
-| Frames Per Event (`aiFrameCount`)                | 4 (1-8)                     | Frames sampled evenly across the event's time window and sent in one request. The biggest cost lever here.                                                                                                                      |
-| Only Describe These Labels (`aiLabels`)          | empty                       | Comma-separated and case-insensitive, e.g. `person,vehicle`. Empty describes every detection event.                                                                                                                             |
-| Minimum Confidence (`aiMinConfidence`)           | 0 (0-1)                     | Skips events whose best detection scores below this — the same score the recordings list filters on.                                                                                                                            |
-| Timeout (seconds) (`aiTimeoutSeconds`)           | 90 (10-600)                 | One deadline for the whole event, covering frame extraction *and* the model call. 90s is deliberately generous: a local model cold-loading into VRAM on the first request after a restart is slow, and a tight budget would make a working local setup look broken. |
+| Frames (`aiFrameCount`)                          | 4 (1-8)                     | Frames sampled evenly across the event's time window and sent in one request. The biggest cost lever here.                                                                                                                      |
+| Labels (`aiLabels`)                              | empty                       | Comma-separated and case-insensitive, e.g. `person,vehicle`. Empty describes every detection event.                                                                                                                             |
+| Min Confidence (`aiMinConfidence`)               | 0 (0-1)                     | Skips events whose best detection scores below this — the same score the recordings list filters on.                                                                                                                            |
+| Timeout (s) (`aiTimeoutSeconds`)                 | 90 (10-600)                 | One deadline for the whole event, covering frame extraction *and* the model call. 90s is deliberately generous: a local model cold-loading into VRAM on the first request after a restart is slow, and a tight budget would make a working local setup look broken. |
 | Queue Depth (`aiQueueDepth`)                     | 8 (1-64)                    | How many events wait for description. Generation is serial — one event at a time — and when the queue is full the **oldest** waiting event is dropped. The only setting here that needs a plugin restart to change.             |
 
 **Test Connection** sends one tiny generated image (a 64x64 JPEG) through the same saved settings,

@@ -72,9 +72,7 @@ func TestStorageSchema_AIDescriptionFields_AreDeclaredWithMatchingDefaults(t *te
 			if s.Title == "" {
 				t.Error("Title must not be empty; it is the form label")
 			}
-			if s.Description == "" {
-				t.Error("Description must not be empty; it is the help text")
-			}
+
 		})
 	}
 }
@@ -220,9 +218,7 @@ func TestStorageSchema_NotificationToggles_AllDefaultToOn(t *testing.T) {
 			if len(s.Condition) != 0 {
 				t.Errorf("Condition = %+v, want none; these are not gated behind anything", s.Condition)
 			}
-			if s.Description == "" {
-				t.Error("Description must not be empty; it is where we say this affects notifications only")
-			}
+
 		})
 	}
 }
@@ -400,5 +396,62 @@ func TestProbeFrame_Always_ReturnsDecodableJPEGBytes(t *testing.T) {
 	// server sniffs exactly this prefix to decide the media type.
 	if frame[0] != 0xFF || frame[1] != 0xD8 {
 		t.Errorf("frame does not start with the JPEG SOI marker: % x", frame[:2])
+	}
+}
+
+// TestStorageSchema_FieldsCarryNoHelpText pins the deliberately terse settings
+// UI. Every field's Description renders as help text under its input, and with
+// three tabs plus a per-camera panel that turned the settings pages into a wall
+// of prose. Titles plus the README carry the meaning now.
+//
+// The single exception is the AI-descriptions master toggle: that line is a cost
+// and privacy disclosure — enabling it ships frames of the user's property to a
+// third party and bills them per event — not an explanation of what the control
+// does. Deleting it should be a deliberate decision, so this test makes doing so
+// fail.
+func TestStorageSchema_FieldsCarryNoHelpText(t *testing.T) {
+	p := &NVRPlugin{}
+
+	for _, s := range p.StorageSchema() {
+		if s.Key == describe.KeyEnabled {
+			if s.Description == "" {
+				t.Error("the AI enable toggle must keep its cost/privacy disclosure")
+			}
+			continue
+		}
+		if s.Description != "" {
+			t.Errorf("%s has help text %q; settings are intentionally terse", s.Key, s.Description)
+		}
+	}
+}
+
+// TestStorageSchema_TitlesAreShort keeps titles readable inside a tab, where the
+// tab itself already supplies the context a long title used to carry.
+func TestStorageSchema_TitlesAreShort(t *testing.T) {
+	const maxTitleLen = 24
+
+	p := &NVRPlugin{}
+	for _, s := range p.StorageSchema() {
+		if s.Hidden {
+			continue
+		}
+		if s.Title == "" {
+			t.Errorf("%s has no Title; it is the only label the field has now", s.Key)
+		}
+		if len(s.Title) > maxTitleLen {
+			t.Errorf("%s title %q is %d chars, want <= %d", s.Key, s.Title, len(s.Title), maxTitleLen)
+		}
+	}
+}
+
+// TestCameraNotifySchema_IsTerse applies the same rule to the per-camera panel.
+func TestCameraNotifySchema_IsTerse(t *testing.T) {
+	for _, s := range cameraNotifySchema() {
+		if s.Description != "" {
+			t.Errorf("%s has help text %q; the per-camera panel is terse too", s.Key, s.Description)
+		}
+		if s.Title == "" {
+			t.Errorf("%s has no Title", s.Key)
+		}
 	}
 }

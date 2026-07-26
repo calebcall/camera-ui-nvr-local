@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.6.1] - 2026-07-26
+
+### Changed
+
+- **Settings are much less bulky.** Every schema field carried a paragraph of help text, rendered under
+  its input; across three tabs plus the per-camera panel that turned the settings pages into a wall of
+  prose. Descriptions are gone and titles are shortened now that the tab supplies the context —
+  `Notify: Person` is just `Person`, `Enable AI Descriptions` is `Enabled`, `Only Describe These
+  Labels` is `Labels`. The README tables are the reference for what each setting does.
+
+  One field keeps a single line: the AI-descriptions master toggle still states that enabling it sends
+  frames to the selected provider and costs money unless pointed at Ollama. That is a cost and privacy
+  disclosure rather than an explanation of the control, and a test now fails if it is removed.
+
 ## [5.6.0] - 2026-07-26
 
 ### Added
@@ -244,6 +258,7 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
+[5.6.1]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.6.1
 [5.6.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.6.0
 [5.5.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.5.0
 [5.4.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.4.0

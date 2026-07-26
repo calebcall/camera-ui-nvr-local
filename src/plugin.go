@@ -6,13 +6,13 @@
 //  1. Method-name casing is automatic and unconditional. sdk.Run registers the
 //     plugin struct itself under the child-RPC namespace:
 //
-//       cleanupRPC, err = client.RegisterHandler(namespaces.PluginChildRPC, plugin)
+//     cleanupRPC, err = client.RegisterHandler(namespaces.PluginChildRPC, plugin)
 //
 //     RegisterHandler calls rpc.ExtractMethods(handler), which walks the
 //     method set of the handler's type and, for every exported Go method,
 //     lowercases just the first rune to produce the wire name:
 //
-//       wireName := toCamelCase(m.Name) // GetManagedCameraIds -> getManagedCameraIds
+//     wireName := toCamelCase(m.Name) // GetManagedCameraIds -> getManagedCameraIds
 //
 //     (toCamelCase: "runes[0] = unicode.ToLower(runes[0]); return string(runes)").
 //     Each wire name is subscribed as its own NATS subject
@@ -24,7 +24,7 @@
 //  2. RPCMethods() is a real, load-bearing allow-list, not just documentation.
 //     ExtractMethods checks whether the handler implements:
 //
-//       type RPCMethodAllowlist interface { RPCMethods() []string }
+//     type RPCMethodAllowlist interface { RPCMethods() []string }
 //
 //     If it does, only the *wire names* returned by RPCMethods() are
 //     registered as subjects — every other exported method on the struct
@@ -32,13 +32,13 @@
 //     is never subscribed on the wire, so the frontend/host cannot reach it
 //     over RPC. Comment straight from rpc/go's handler.go:
 //
-//       "RPCMethodAllowlist lets a struct handler restrict which of its
-//       exported methods are reachable over RPC. When a handler implements
-//       it, only the returned wire names (camelCase, e.g. "getValue") are
-//       registered; every other exported method — including RPCMethods
-//       itself — stays callable in-process but is not exposed on the wire.
-//       Handlers that do not implement it expose all exported methods (the
-//       default)."
+//     "RPCMethodAllowlist lets a struct handler restrict which of its
+//     exported methods are reachable over RPC. When a handler implements
+//     it, only the returned wire names (camelCase, e.g. "getValue") are
+//     registered; every other exported method — including RPCMethods
+//     itself — stays callable in-process but is not exposed on the wire.
+//     Handlers that do not implement it expose all exported methods (the
+//     default)."
 //
 //     sdk.DeviceStorage uses exactly this pattern (storage.go:74-83) to
 //     narrow its RPC surface to the config API while keeping lifecycle
@@ -521,19 +521,17 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Type:         sdk.JsonSchemaTypeNumber,
 			Key:          nvrQuotaGBStorageKey,
 			Title:        "Disk Quota (GB)",
-			Description:  "Optional cap on this NVR instance's total recorded storage, across every camera. 0 disables the cap (age-based retention only); once exceeded, the oldest segments across every camera are deleted first.",
 			DefaultValue: float64(0),
 			Minimum:      sdk.Float64(0),
 			Group:        storageGroup,
 			Store:        &storeTrue,
 		},
 		{
-			Type:        sdk.JsonSchemaTypeString,
-			Key:         recordingPathStorageKey,
-			Title:       "Recording Storage Path",
-			Description: "Optional custom directory where new recordings (and their thumbnails) are written, e.g. an external drive or network share mounted on this host. Leave empty to use this plugin's default storage location. Changing this only affects NEW recordings — existing recordings stay where they are and remain playable.",
-			Group:       storageGroup,
-			Store:       &storeTrue,
+			Type:  sdk.JsonSchemaTypeString,
+			Key:   recordingPathStorageKey,
+			Title: "Storage Path",
+			Group: storageGroup,
+			Store: &storeTrue,
 		},
 		// Detections tab: which detection types are worth a notification. All
 		// default to ON so that upgrading changes nothing — a user who never
@@ -552,8 +550,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          notifyPersonKey,
-			Title:        "Notify: Person",
-			Description:  "Send a notification when a person is detected. Turning this off does not stop recording or detection — the event is still saved, still on the timeline, and still described.",
+			Title:        "Person",
 			DefaultValue: true,
 			Group:        detectionsGroup,
 			Store:        &storeTrue,
@@ -561,8 +558,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          notifyVehicleKey,
-			Title:        "Notify: Vehicle",
-			Description:  "Send a notification when a vehicle is detected. Often the first one to turn off for a camera facing a road or shared driveway.",
+			Title:        "Vehicle",
 			DefaultValue: true,
 			Group:        detectionsGroup,
 			Store:        &storeTrue,
@@ -570,8 +566,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          notifyAnimalKey,
-			Title:        "Notify: Animal",
-			Description:  "Send a notification when an animal is detected — pets, wildlife, next door's cat.",
+			Title:        "Animal",
 			DefaultValue: true,
 			Group:        detectionsGroup,
 			Store:        &storeTrue,
@@ -579,8 +574,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          notifyPackageKey,
-			Title:        "Notify: Package",
-			Description:  "Send a notification when a package is detected.",
+			Title:        "Package",
 			DefaultValue: true,
 			Group:        detectionsGroup,
 			Store:        &storeTrue,
@@ -588,17 +582,21 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          notifyOtherKey,
-			Title:        "Notify: Other detections",
-			Description:  "Send a notification for detection types outside the standard set — labels produced by a classifier plugin, such as a specific bird or a weather condition. Without this they would be the one kind of detection you could not filter.",
+			Title:        "Other",
 			DefaultValue: true,
 			Group:        detectionsGroup,
 			Store:        &storeTrue,
 		},
 		{
-			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          describe.KeyEnabled,
-			Title:        "Enable AI Descriptions",
-			Description:  "Generate a written description of each detection event using a vision model, shown on event cards, in the recordings list, and over the player. OFF by default: with the default provider below this sends recorded frames to OpenAI's paid API and costs roughly $0.003-0.006 per event. Choose the Ollama provider instead to keep everything on your own hardware for free.",
+			Type: sdk.JsonSchemaTypeBoolean,
+			Key:  describe.KeyEnabled,
+			// The only field here that keeps help text. It is a cost and
+			// privacy disclosure, not a description of what the control does:
+			// turning this on ships frames of the user's property to a third
+			// party and bills them per event. Everything else relies on its
+			// title plus the README.
+			Title:        "Enabled",
+			Description:  "Sends frames to the selected provider. Costs money per event unless you choose Ollama.",
 			DefaultValue: false,
 			Group:        genAIGroup,
 			Store:        &storeTrue,
@@ -607,7 +605,6 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Type:         sdk.JsonSchemaTypeString,
 			Key:          describe.KeyProvider,
 			Title:        "Provider",
-			Description:  "Where descriptions are generated. OpenAI and Gemini are hosted, cost money per event, and receive frames of whatever your cameras see. Ollama runs on your own hardware for free and sends nothing off your network. All three speak the same API, so switching is just this dropdown.",
 			Enum:         []string{describe.ProviderOpenAI, describe.ProviderOllama, describe.ProviderGemini},
 			DefaultValue: describe.DefaultProvider,
 			Required:     true,
@@ -623,8 +620,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			// provider they picked.
 			Type:         sdk.JsonSchemaTypeString,
 			Key:          describe.KeyBaseURL,
-			Title:        "Ollama Base URL",
-			Description:  "Where your Ollama server is reachable, including the /v1 suffix. Any other OpenAI-compatible runtime works here too — LM Studio, vLLM, llama.cpp — so use this provider for those as well.",
+			Title:        "Base URL",
 			Placeholder:  describe.DefaultOllamaBaseURL,
 			DefaultValue: describe.DefaultOllamaBaseURL,
 			Required:     true,
@@ -633,14 +629,13 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Condition:    aiProviderCondition(describe.ProviderOllama),
 		},
 		{
-			Type:        sdk.JsonSchemaTypeString,
-			Key:         describe.KeyAPIKey,
-			Title:       "API Key",
-			Description: "Required for OpenAI and Gemini. Leave empty for a local Ollama, which does not authenticate by default.",
-			Format:      sdk.StringFormatPassword,
-			Group:       genAIGroup,
-			Store:       &storeTrue,
-			Condition:   aiEnabledCondition(),
+			Type:      sdk.JsonSchemaTypeString,
+			Key:       describe.KeyAPIKey,
+			Title:     "API Key",
+			Format:    sdk.StringFormatPassword,
+			Group:     genAIGroup,
+			Store:     &storeTrue,
+			Condition: aiEnabledCondition(),
 		},
 		{
 			// One model field per provider, rather than one shared field, so
@@ -650,7 +645,6 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Type:         sdk.JsonSchemaTypeString,
 			Key:          describe.KeyModelOpenAI,
 			Title:        "Model",
-			Description:  "A vision-capable OpenAI model. " + describe.DefaultModelOpenAI + " is the cost-efficient high-volume tier; move up to gpt-5.6-terra if descriptions read too generic.",
 			Placeholder:  describe.DefaultModelOpenAI,
 			DefaultValue: describe.DefaultModelOpenAI,
 			Required:     true,
@@ -662,7 +656,6 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Type:         sdk.JsonSchemaTypeString,
 			Key:          describe.KeyModelGemini,
 			Title:        "Model",
-			Description:  "A vision-capable Gemini model. " + describe.DefaultModelGemini + " is the cheapest current tier; gemini-3.5-flash reasons noticeably better on ambiguous scenes for more per event.",
 			Placeholder:  describe.DefaultModelGemini,
 			DefaultValue: describe.DefaultModelGemini,
 			Required:     true,
@@ -674,7 +667,6 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Type:         sdk.JsonSchemaTypeString,
 			Key:          describe.KeyModelOllama,
 			Title:        "Model",
-			Description:  "A vision-capable model you have already pulled on that server. " + describe.DefaultModelOllama + " is a reasonable starting point. A model you have not pulled returns a clear error from Ollama — use Test Connection to check before waiting on a real event.",
 			Placeholder:  describe.DefaultModelOllama,
 			DefaultValue: describe.DefaultModelOllama,
 			Required:     true,
@@ -685,8 +677,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeNumber,
 			Key:          describe.KeyFrameCount,
-			Title:        "Frames Per Event",
-			Description:  "How many frames across the event are sent to the model. More frames describe motion better but cost proportionally more — this is the single biggest cost lever here.",
+			Title:        "Frames",
 			DefaultValue: float64(describe.DefaultFrameCount),
 			Minimum:      sdk.Float64(1),
 			Maximum:      sdk.Float64(8),
@@ -698,8 +689,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:        sdk.JsonSchemaTypeString,
 			Key:         describe.KeyLabels,
-			Title:       "Only Describe These Labels",
-			Description: "Comma-separated detection labels, e.g. \"person,vehicle\". Leave empty to describe every detection event. A real cost control, not a nicety: a camera facing a public road can otherwise generate thousands of paid requests a day.",
+			Title:       "Labels",
 			Placeholder: "person,vehicle",
 			Group:       genAIGroup,
 			Store:       &storeTrue,
@@ -708,8 +698,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeNumber,
 			Key:          describe.KeyMinConfidence,
-			Title:        "Minimum Confidence",
-			Description:  "Skip events whose best detection scores below this. 0 describes everything that passes the label filter.",
+			Title:        "Min Confidence",
 			DefaultValue: float64(0),
 			Minimum:      sdk.Float64(0),
 			Maximum:      sdk.Float64(1),
@@ -721,8 +710,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 		{
 			Type:         sdk.JsonSchemaTypeNumber,
 			Key:          describe.KeyTimeoutSeconds,
-			Title:        "Timeout (seconds)",
-			Description:  "How long one description may take, covering both frame extraction and the model call. The default is deliberately generous because a local model cold-loading into VRAM on its first request is slow.",
+			Title:        "Timeout (s)",
 			DefaultValue: float64(describe.DefaultTimeoutSeconds),
 			Minimum:      sdk.Float64(10),
 			Maximum:      sdk.Float64(600),
@@ -734,7 +722,6 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Type:         sdk.JsonSchemaTypeNumber,
 			Key:          describe.KeyQueueDepth,
 			Title:        "Queue Depth",
-			Description:  "How many pending events wait for description before the oldest is dropped. Descriptions are generated one at a time. Changing this takes effect after a plugin restart, unlike every other setting here.",
 			DefaultValue: float64(describe.DefaultQueueDepth),
 			Minimum:      sdk.Float64(1),
 			Maximum:      sdk.Float64(64),
@@ -744,14 +731,13 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Condition:    aiEnabledCondition(),
 		},
 		{
-			Type:        sdk.JsonSchemaTypeSubmit,
-			Key:         aiTestConnectionKey,
-			Title:       "Test Connection",
-			Description: "Sends one tiny image to the endpoint above and reports what came back. Use this to tell a wrong URL, a bad key, a missing model, and a text-only model apart.",
-			Color:       sdk.ButtonColorInfo,
-			Group:       genAIGroup,
-			Condition:   aiEnabledCondition(),
-			OnClick:     p.testAIConnection,
+			Type:      sdk.JsonSchemaTypeSubmit,
+			Key:       aiTestConnectionKey,
+			Title:     "Test Connection",
+			Color:     sdk.ButtonColorInfo,
+			Group:     genAIGroup,
+			Condition: aiEnabledCondition(),
+			OnClick:   p.testAIConnection,
 		},
 	}
 }
