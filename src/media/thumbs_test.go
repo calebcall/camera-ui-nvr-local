@@ -25,16 +25,31 @@ func requireFFmpeg(t *testing.T) {
 // jpegMagic is the two-byte SOI marker every valid JPEG file starts with.
 var jpegMagic = []byte{0xFF, 0xD8}
 
+// fixtureSize is the frame size genFixtureSegment records at. Small on
+// purpose: every test that only needs "a decodable frame came out" is cheaper
+// and faster at this size.
+const fixtureSize = "320x240"
+
 // genFixtureSegment generates a real short fMP4 file via the local ffmpeg
 // binary (a synthetic lavfi testsrc, exactly like recorder/recorder_test.go's
 // fixture pattern) and returns a store.Segment describing it, covering
 // [startMs, startMs+durationMs).
 func genFixtureSegment(t *testing.T, dir string, startMs int64, durationSeconds int) store.Segment {
 	t.Helper()
+	return genFixtureSegmentSize(t, dir, startMs, durationSeconds, fixtureSize)
+}
+
+// genFixtureSegmentSize is genFixtureSegment with an explicit "WxH" frame
+// size, for the tests whose assertions are about resolution rather than just
+// decodability — FrameSampler's downscale test (frames_test.go) needs one
+// fixture wider and one narrower than maxSampledFrameWidth to prove its
+// scale filter caps a large frame without upscaling a small one.
+func genFixtureSegmentSize(t *testing.T, dir string, startMs int64, durationSeconds int, size string) store.Segment {
+	t.Helper()
 	path := filepath.Join(dir, "segment.mp4")
 
 	genCmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "lavfi", "-i", "testsrc=duration="+strconv.Itoa(durationSeconds)+":size=320x240:rate=10",
+		"-f", "lavfi", "-i", "testsrc=duration="+strconv.Itoa(durationSeconds)+":size="+size+":rate=10",
 		"-c:v", "libx264", "-movflags", "+frag_keyframe+empty_moov", path)
 	if out, err := genCmd.CombinedOutput(); err != nil {
 		t.Fatalf("generate fixture fMP4: %v\n%s", err, out)

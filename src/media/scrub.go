@@ -309,14 +309,18 @@ func (s *Scrubber) PreviewFrames(ctx context.Context, cameraID string, startUs, 
 }
 
 // sampleTimestamp returns the i-th of count evenly-spaced timestamps across
-// [startUs, endUs] (inclusive of both ends: i==0 -> startUs, i==count-1 ->
-// endUs). count==1 returns startUs.
-func sampleTimestamp(startUs, endUs int64, i, count int) int64 {
+// [start, end] (inclusive of both ends: i==0 -> start, i==count-1 -> end).
+// count<=1 returns start.
+//
+// Unit-agnostic on purpose: PreviewFrames works in microseconds, while
+// FrameSampler (frames.go) shares this same arithmetic in milliseconds.
+// Whatever unit goes in comes back out.
+func sampleTimestamp(start, end int64, i, count int) int64 {
 	if count <= 1 {
-		return startUs
+		return start
 	}
-	span := endUs - startUs
-	return startUs + span*int64(i)/int64(count-1)
+	span := end - start
+	return start + span*int64(i)/int64(count-1)
 }
 
 // extractKeyframe runs the task brief's exact extraction invocation:
