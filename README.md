@@ -165,9 +165,10 @@ wrong (see [Important: the package name](#important-the-package-name)).
 ## Configuration
 
 Configured from the camera.ui **Settings → Recordings** page, under *Global Settings*. The settings
-are split into two tabs:
+are split into three tabs:
 
 - **Storage** — where recordings go and how much disk they may use.
+- **Detections** — which detection types are worth a notification.
 - **GenAI** — [AI event descriptions](#ai-event-descriptions), off by default.
 
 **Storage tab:**
@@ -179,6 +180,37 @@ are split into two tabs:
 
 > **Set a quota.** With no cap, continuous recording of several high-resolution cameras can fill a
 > disk in hours. Point `recordingPath` at a roomy volume and set `nvrQuotaGB` to a safe ceiling.
+
+### Notification filtering
+
+The **Detections** tab controls which detection types produce a notification. Every toggle defaults
+to **on**, so upgrading changes nothing until you turn something off.
+
+| Toggle (storage key)                   | Covers                                                                        |
+| -------------------------------------- | ----------------------------------------------------------------------------- |
+| Notify: Person (`notifyPerson`)         | `person` detections.                                                          |
+| Notify: Vehicle (`notifyVehicle`)       | `vehicle` detections. Usually the first one off for a road-facing camera.      |
+| Notify: Animal (`notifyAnimal`)         | `animal` detections — pets, wildlife.                                         |
+| Notify: Package (`notifyPackage`)       | `package` detections.                                                         |
+| Notify: Other detections (`notifyOther`) | Labels from classifier plugins outside the standard set (a bird, a weather condition). Without this they would be the one kind of detection you could not filter. |
+
+Three things worth knowing:
+
+- **These affect notifications only.** Recording, retention, timeline markers, thumbnails, and AI
+  descriptions all continue exactly as before. A detection you don't want to be pinged about is still
+  footage you'll want to review.
+- **Any enabled label allows the notification.** A person arriving in a car is one event carrying both
+  labels, so with Vehicle off you still get told about the person. Turning Vehicle off silences
+  vehicle-*only* events.
+- **There is no Motion or Audio toggle**, because motion-only and audio-only events never produce a
+  notification in the first place — such a switch would do nothing.
+
+> **Want this per camera?** These toggles are plugin-wide: the camera.ui plugin API exposes only
+> plugin-level settings, with no per-camera hook. For per-camera rules, use camera.ui **automations**
+> instead — a *detection* trigger filters on a specific camera plus specific labels (and a confidence
+> floor, faces, or plates) and feeds a *notification* action. If you go that route, switch this plugin
+> off as a notification source under Settings → Notifications first, or you'll get both notifications.
+> The trade-off is that you rebuild the body and deep link yourself, which this plugin does for you.
 
 ### AI event descriptions
 

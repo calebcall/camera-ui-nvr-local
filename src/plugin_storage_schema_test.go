@@ -180,9 +180,87 @@ func TestStorageSchema_GroupOrder_PutsStorageFirst(t *testing.T) {
 		}
 	}
 
-	want := []string{storageGroup, genAIGroup}
+	want := []string{storageGroup, detectionsGroup, genAIGroup}
 	if !slices.Equal(groups, want) {
 		t.Errorf("tab order = %v, want %v", groups, want)
+	}
+}
+
+// TestStorageSchema_NotificationToggles_AllDefaultToOn is the upgrade-safety
+// test for the Detections tab. Every toggle defaulting to true is what makes
+// this feature invisible until someone opts into using it: a user who never
+// opens the tab keeps receiving exactly the notifications they received before
+// it existed.
+//
+// A single toggle shipped defaulting to false would silently stop a class of
+// notification on upgrade, which is the kind of regression nobody reports as a
+// bug — they just quietly stop being told about people at their door.
+func TestStorageSchema_NotificationToggles_AllDefaultToOn(t *testing.T) {
+	p := &NVRPlugin{}
+	schemas := p.StorageSchema()
+
+	for _, key := range []string{
+		notifyPersonKey, notifyVehicleKey, notifyAnimalKey, notifyPackageKey, notifyOtherKey,
+	} {
+		t.Run(key, func(t *testing.T) {
+			s := schemaByKey(t, schemas, key)
+
+			if s.Type != sdk.JsonSchemaTypeBoolean {
+				t.Errorf("Type = %q, want %q", s.Type, sdk.JsonSchemaTypeBoolean)
+			}
+			if s.DefaultValue != true {
+				t.Errorf("DefaultValue = %v, want true (upgrading must not silence anything)", s.DefaultValue)
+			}
+			if s.Group != detectionsGroup {
+				t.Errorf("Group = %q, want %q", s.Group, detectionsGroup)
+			}
+			if s.Store == nil || !*s.Store {
+				t.Error("Store must be true so the setting survives a restart")
+			}
+			if len(s.Condition) != 0 {
+				t.Errorf("Condition = %+v, want none; these are not gated behind anything", s.Condition)
+			}
+			if s.Description == "" {
+				t.Error("Description must not be empty; it is where we say this affects notifications only")
+			}
+		})
+	}
+}
+
+// TestStorageSchema_NotificationToggles_CoverEveryFilterableLabel keeps the form
+// and the filter in agreement. notifyObjectLabelKeys is what notify_filter.go
+// actually consults, so a label added there without a matching schema field
+// would become permanently unfilterable — the toggle would simply not exist,
+// while the filter kept looking for a value that could only ever be its default.
+func TestStorageSchema_NotificationToggles_CoverEveryFilterableLabel(t *testing.T) {
+	p := &NVRPlugin{}
+	schemas := p.StorageSchema()
+
+	for label, key := range notifyObjectLabelKeys {
+		if got := schemaByKey(t, schemas, key).Key; got != key {
+			t.Errorf("label %q maps to key %q, which has no schema field", label, key)
+		}
+	}
+
+	// The catch-all is not in that map (it is the fallback for anything absent
+	// from it), so it is checked separately rather than being quietly omitted.
+	schemaByKey(t, schemas, notifyOtherKey)
+}
+
+// TestStorageSchema_NoMotionOrAudioNotifyToggle pins a deliberate omission so a
+// later well-meaning edit does not "complete the set".
+//
+// store.EventHasDetections excludes motion-only and audio-only events from
+// notifying before the filter is ever consulted, so such a toggle would either
+// do nothing at all or require changing what notifies — a behavior change that
+// has no business arriving inside a filtering feature.
+func TestStorageSchema_NoMotionOrAudioNotifyToggle(t *testing.T) {
+	p := &NVRPlugin{}
+	for _, s := range p.StorageSchema() {
+		switch s.Key {
+		case "notifyMotion", "notifyAudio":
+			t.Errorf("%q must not exist: motion-only and audio-only events never notify, so it would be a dead control", s.Key)
+		}
 	}
 }
 

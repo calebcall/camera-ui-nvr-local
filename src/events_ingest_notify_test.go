@@ -52,7 +52,7 @@ func (f *fakeCameraNames) CameraName(cameraID string) (string, bool) {
 func TestDetectionEventIngester_Notify_ObjectEventTerminalMessagePublishesOnce(t *testing.T) {
 	notifier := &fakeNotifier{}
 	names := &fakeCameraNames{names: map[string]string{"cam1": "Sideyard"}}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, names, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, names, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -89,7 +89,7 @@ func TestDetectionEventIngester_Notify_ObjectEventTerminalMessagePublishesOnce(t
 // notify).
 func TestDetectionEventIngester_Notify_MotionOnlyEventNeverPublishes(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -106,7 +106,7 @@ func TestDetectionEventIngester_Notify_MotionOnlyEventNeverPublishes(t *testing.
 // non-object-detection gate as motion-only.
 func TestDetectionEventIngester_Notify_AudioOnlyEventNeverPublishes(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -123,7 +123,7 @@ func TestDetectionEventIngester_Notify_AudioOnlyEventNeverPublishes(t *testing.T
 // NOT publish — only the terminal message does.
 func TestDetectionEventIngester_Notify_NonTerminalMessagesNeverPublish(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateActive,
@@ -145,7 +145,7 @@ func TestDetectionEventIngester_Notify_NonTerminalMessagesNeverPublish(t *testin
 // second time.
 func TestDetectionEventIngester_Notify_DuplicateTerminalMessageDoesNotDoublePublish(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
 
 	end := sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -163,7 +163,7 @@ func TestDetectionEventIngester_Notify_DuplicateTerminalMessageDoesNotDoublePubl
 // a nil notifier (the default for tests, or a host build that never wired
 // api.NotificationManager) is a safe no-op rather than a nil-pointer panic.
 func TestDetectionEventIngester_Notify_NilNotifierNeverPublishesOrPanics(t *testing.T) {
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -179,7 +179,7 @@ func TestDetectionEventIngester_Notify_NilNotifierNeverPublishesOrPanics(t *test
 // notify.
 func TestDetectionEventIngester_Notify_UnresolvedCameraNameFallsBackToID(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -201,7 +201,7 @@ func TestDetectionEventIngester_Notify_UnresolvedCameraNameFallsBackToID(t *test
 // through.
 func TestDetectionEventIngester_Notify_PublishErrorIsSwallowed(t *testing.T) {
 	notifier := &fakeNotifier{publishErr: errors.New("boom")}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -230,5 +230,86 @@ func TestDetectionSummary(t *testing.T) {
 	}
 	if got := detectionSummary(sdk.DetectionEvent{}); got != "" {
 		t.Fatalf("empty event summary = %q, want empty", got)
+	}
+}
+
+// TestNotify_FilterSuppressesDisabledDetectionType wires the REAL
+// notifyLabelFilter into the ingester, so this covers the seam between the
+// filter's own unit tests and notify's gate ordering rather than re-testing the
+// filter in isolation.
+func TestNotify_FilterSuppressesDisabledDetectionType(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		settings    notifyStore
+		labels      []string
+		wantPublish int
+	}{
+		{"nothing configured notifies", notifyStore{}, []string{"vehicle"}, 1},
+		{"disabled type is suppressed", notifyStore{notifyVehicleKey: false}, []string{"vehicle"}, 0},
+		{"another enabled label still notifies", notifyStore{notifyVehicleKey: false}, []string{"person", "vehicle"}, 1},
+		{"a different type is unaffected", notifyStore{notifyVehicleKey: false}, []string{"person"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			notifier := &fakeNotifier{}
+			i := newDetectionEventIngester(
+				&fakeEventStore{}, nil, nil, nil, notifier, nil, nil,
+				newNotifyLabelFilter(tc.settings), nil,
+			)
+
+			ended := labelEvent(tc.labels...)
+			i.handle(sdk.DetectionEventEnd, ended)
+
+			if notifier.publishCalls != tc.wantPublish {
+				t.Errorf("publish calls = %d, want %d", notifier.publishCalls, tc.wantPublish)
+			}
+		})
+	}
+}
+
+// TestNotify_FilterRunsBeforeDedup is the ordering test, and the reason it
+// matters is not obvious from reading notify top to bottom.
+//
+// markFirst is a one-shot latch per event ID. If filtering happened after it, a
+// suppressed event would still consume its own notification slot — so a user who
+// re-enabled that detection type while the event was still arriving would get
+// nothing, and nothing in the UI would explain why. Filtering first leaves the
+// latch untouched for a suppressed event.
+func TestNotify_FilterRunsBeforeDedup(t *testing.T) {
+	notifier := &fakeNotifier{}
+	settings := notifyStore{notifyVehicleKey: false}
+	i := newDetectionEventIngester(
+		&fakeEventStore{}, nil, nil, nil, notifier, nil, nil,
+		newNotifyLabelFilter(settings), nil,
+	)
+
+	ended := labelEvent("vehicle")
+
+	// Suppressed: must not publish, and must not burn the dedup slot.
+	i.handle(sdk.DetectionEventEnd, ended)
+	if notifier.publishCalls != 0 {
+		t.Fatalf("publish calls = %d, want 0 while vehicle is off", notifier.publishCalls)
+	}
+
+	// The user turns vehicle notifications back on; the same event arriving
+	// again must now be publishable, which is only true if the earlier
+	// suppressed pass left markFirst alone.
+	settings[notifyVehicleKey] = true
+	i.handle(sdk.DetectionEventEnd, ended)
+
+	if notifier.publishCalls != 1 {
+		t.Errorf("publish calls = %d, want 1 after re-enabling; the suppressed pass consumed the dedup slot", notifier.publishCalls)
+	}
+}
+
+// TestNotify_NilFilterNotifiesEverything keeps the optional-dependency
+// convention verified at the ingester level too.
+func TestNotify_NilFilterNotifiesEverything(t *testing.T) {
+	notifier := &fakeNotifier{}
+	i := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil, nil)
+
+	i.handle(sdk.DetectionEventEnd, labelEvent("vehicle"))
+
+	if notifier.publishCalls != 1 {
+		t.Errorf("publish calls = %d, want 1 with no filter wired", notifier.publishCalls)
 	}
 }
