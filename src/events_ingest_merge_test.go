@@ -13,7 +13,7 @@ import (
 // event: start (Segments:[]), segment-start (person=0.72), update
 // (Segments:[]), segment-end (person=0.72), end (Segments:[]). Before the
 // accumulator, the final upsert (the terminal 'end' message) stored
-// Segments:[] — bestConfidence/primaryLabel (store/events.go) then saw no
+// Segments:[] — BestConfidence/PrimaryLabel (store/events.go) then saw no
 // detections at all, so the row persisted with confidence=0,
 // primaryLabel="motion", failing the frontend's default
 // minConfidence:0.5 filter. This proves the FINAL upserted row instead

@@ -165,7 +165,7 @@ func upsertOneEvent(stmt *sqlite3.Stmt, ev DetectionEvent) error {
 	if err := stmt.BindText(6, PrimaryLabel(ev)); err != nil {
 		return err
 	}
-	if err := stmt.BindFloat(7, bestConfidence(ev)); err != nil {
+	if err := stmt.BindFloat(7, BestConfidence(ev)); err != nil {
 		return err
 	}
 	if box := bestBox(ev); box != nil {
@@ -270,10 +270,18 @@ func bestDetectionLabel(ev DetectionEvent) string {
 	return bestLabel
 }
 
-// bestConfidence returns the highest confidence score across the event's
+// BestConfidence returns the highest confidence score across the event's
 // triggers, detections, and attributes, for the indexed `confidence` column
 // that Query's MinConfidence filter runs against directly in SQL.
-func bestConfidence(ev DetectionEvent) float64 {
+//
+// Exported (was bestConfidence) specifically so the AI-description confidence
+// gate filters on the exact same value this function writes to that indexed
+// column, rather than duplicating — and risking drifting from — this ranking.
+// A gate that disagreed with the column would be the worst kind of wrong: a
+// user setting a minimum confidence would see it honored by the event list's
+// filter but not by which events got described. Same reasoning that exported
+// PrimaryLabel for the notification path.
+func BestConfidence(ev DetectionEvent) float64 {
 	var best float64
 	for _, t := range ev.Triggers {
 		if t.Score > best {
@@ -335,6 +343,48 @@ func (s *EventStore) SetThumbRef(eventID, thumbRef string) error {
 	}
 	if err := stmt.Exec(); err != nil {
 		return fmt.Errorf("store: set thumb_ref for event %s: %w", eventID, err)
+	}
+	return nil
+}
+
+// SetDescription writes eventID's description column to desc marshalled as
+// JSON — the AI-generated description produced for the event once the vision
+// model actually returned one.
+//
+// Deliberately separate from Upsert for the same reason SetThumbRef is (see
+// its doc comment), but with sharper consequences: Upsert rewrites the whole
+// raw column on every lifecycle message, so a description embedded in raw
+// would be silently erased by any duplicate or late terminal message that
+// arrived after generation finished — and generation is slow enough (a vision
+// inference call) that losing that race is ordinary, not exotic. A dedicated
+// column cannot be clobbered by Upsert at all, since Upsert never names it.
+//
+// A no-op (not an error) when eventID doesn't match any row: retention may
+// have deleted the event between generation starting and finishing, and that
+// is normal operation rather than a failure the caller should react to.
+func (s *EventStore) SetDescription(eventID string, desc sdk.EventDescription) error {
+	payload, err := json.Marshal(desc)
+	if err != nil {
+		return fmt.Errorf("store: marshal description for event %s: %w", eventID, err)
+	}
+
+	s.db.Lock()
+	defer s.db.Unlock()
+
+	stmt, _, err := s.db.Conn().Prepare(`UPDATE events SET description = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("store: prepare set description: %w", err)
+	}
+	defer stmt.Close()
+
+	if err := stmt.BindText(1, string(payload)); err != nil {
+		return err
+	}
+	if err := stmt.BindText(2, eventID); err != nil {
+		return err
+	}
+	if err := stmt.Exec(); err != nil {
+		return fmt.Errorf("store: set description for event %s: %w", eventID, err)
 	}
 	return nil
 }
@@ -514,6 +564,7 @@ func (s *EventStore) Query(cameraIDs []string, opts GetEventsOptions) (GetEvents
 		if err := json.Unmarshal([]byte(stmt.ColumnText(0)), &ev); err != nil {
 			return GetEventsResult{}, fmt.Errorf("store: decode event raw json: %w", err)
 		}
+		attachDescription(&ev, stmt.ColumnText(1))
 		rows = append(rows, ev)
 	}
 	if err := stmt.Err(); err != nil {
@@ -530,6 +581,44 @@ func (s *EventStore) Query(cameraIDs []string, opts GetEventsOptions) (GetEvents
 	}
 
 	return GetEventsResult{Events: rows, HasMore: hasMore}, nil
+}
+
+// attachDescription decodes a row's description column (written by
+// SetDescription) and hangs it on ev's FIRST segment, which is where the
+// camera.ui frontend looks for it: every consumer resolves a description via
+// `segments.find(s => s.description)`, so the first segment is both correct and
+// sufficient.
+//
+// Called inside Query's decode loop, before filterEvents, so a description is
+// present for the whole post-filter pass. No filter reads Description today,
+// so this changes no results; it just keeps the decoded event complete at every
+// stage rather than only at the point of return.
+//
+// Three cases are deliberately silent no-ops rather than errors, because an
+// unusable description must never fail a query that would otherwise succeed —
+// the event list going blank is far worse than one event missing its optional
+// narrative:
+//
+//   - an empty/NULL column (the overwhelmingly common case: nothing was ever
+//     generated for this event). ColumnText returns "" for NULL.
+//   - a malformed column (hand-edited, or written by a future version with an
+//     incompatible shape).
+//   - an event with no segments at all, which has nowhere to hang a
+//     description. Unreachable in practice, since only events carrying
+//     detections are ever described and those always carry segments, but the
+//     loop runs over every row in the table and must not panic on one.
+func attachDescription(ev *DetectionEvent, raw string) {
+	if strings.TrimSpace(raw) == "" {
+		return
+	}
+	if len(ev.Segments) == 0 {
+		return
+	}
+	var desc sdk.EventDescription
+	if err := json.Unmarshal([]byte(raw), &desc); err != nil {
+		return
+	}
+	ev.Segments[0].Description = &desc
 }
 
 // buildEventsQuery constructs the SQL text and positional bind args for
@@ -570,7 +659,7 @@ func buildEventsQuery(cameraIDs []string, opts GetEventsOptions) (string, []any,
 		args = append(args, *opts.HasRecording)
 	}
 
-	query := "SELECT raw FROM events"
+	query := "SELECT raw, description FROM events"
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}

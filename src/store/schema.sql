@@ -54,7 +54,19 @@ CREATE TABLE IF NOT EXISTS events (
   box JSON,
   thumb_ref TEXT,
   has_recording INTEGER,
-  raw JSON
+  raw JSON,
+  -- description: the AI-generated sdk.EventDescription for this event as
+  -- JSON, or NULL when none was generated (which is every event, until the
+  -- feature is switched on). Deliberately its own column rather than
+  -- embedded in raw: EventStore.Upsert rewrites raw wholesale on every
+  -- lifecycle message, so a duplicate or late terminal message arriving
+  -- after generation completed would silently erase a description stored
+  -- there. Merged onto Segments[0].Description when Query decodes a row —
+  -- see attachDescription (events.go). Added retroactively via an ALTER
+  -- TABLE migration for pre-existing v2 databases (see db.go's
+  -- migrateToV3); nullable with no default, since NULL is exactly the state
+  -- every pre-existing event is genuinely in.
+  description TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_camera_ts

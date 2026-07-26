@@ -97,7 +97,7 @@ type detectionAccumulator struct {
 // Thumbnail into this event's running accumulatedEvent (creating one if this
 // is the first message seen for event.ID), then returns a copy of event
 // whose Types/Segments/Thumbnail are replaced by the accumulated union so
-// far — so store/events.go's bestConfidence/primaryLabel (which scan
+// far — so store/events.go's BestConfidence/PrimaryLabel (which scan
 // ev.Segments[].Detections/Attributes) and eventHasDetections (which scans
 // ev.Types) see the richest data observed across the event's ENTIRE
 // lifecycle, not just whatever this one message happened to carry. Every
@@ -237,7 +237,7 @@ func sortedTypeUnion(types map[string]struct{}) []string {
 // synthesizeSegments rebuilds event.Segments as a single segment spanning
 // entry's full accumulated union of detections/attributes/scene
 // thumbnail/zones/description, so downstream code that scans ev.Segments
-// (bestConfidence, primaryLabel, GetDetectionHeatmap, thumbnailsFromEvent's
+// (BestConfidence, PrimaryLabel, GetDetectionHeatmap, thumbnailsFromEvent's
 // Scenes map, ...) sees everything observed across the event's lifecycle
 // rather than only whichever single segment-* message happened to produce
 // this one. Returns nil (not an empty non-nil slice) when nothing at all
