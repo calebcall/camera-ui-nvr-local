@@ -42,6 +42,15 @@ import (
 // would be a control that does nothing — or, if it were wired to start
 // notifying for audio, a behavior change smuggled in under a filtering feature.
 const (
+	// notifyTypesKey holds the enabled detection types as a list, rendered as a
+	// single multi-select. It replaced five separate booleans, which the
+	// frontend drew as five bordered toggle rows — one control conveys the same
+	// thing in a fraction of the height.
+	notifyTypesKey = "notifyTypes"
+
+	// The five legacy boolean keys, shipped in 5.5.0/5.6.0. Retained READ-ONLY
+	// as a migration fallback for configs written before notifyTypesKey existed,
+	// and deliberately absent from every schema so nothing writes to them again.
 	notifyPersonKey  = "notifyPerson"
 	notifyVehicleKey = "notifyVehicle"
 	notifyAnimalKey  = "notifyAnimal"
@@ -74,6 +83,85 @@ var notifyObjectLabelKeys = map[string]string{
 	"vehicle": notifyVehicleKey,
 	"animal":  notifyAnimalKey,
 	"package": notifyPackageKey,
+}
+
+// notifyTypeOther is the multi-select entry covering classifier-produced labels
+// outside the standard set, mirroring what notifyOtherKey governed.
+const notifyTypeOther = "other"
+
+// notifyTypeOptions is the multi-select's option list, and — as the schema's
+// DefaultValue — the set a fresh install notifies for. Order is presentation.
+var notifyTypeOptions = []string{"person", "vehicle", "animal", "package", notifyTypeOther}
+
+// enabledNotifyTypes resolves which detection types a store permits.
+//
+// Resolution order matters and is the whole migration story:
+//
+//  1. notifyTypesKey present — use it verbatim, INCLUDING an empty list. Empty
+//     means "notify for nothing", a deliberate choice someone made in the UI, and
+//     treating it as "unset" would silently re-enable everything they turned off.
+//     Distinguishing absent from empty is the entire point; this repo has already
+//     been bitten once by conflating them (see keyRoles in recorder/manager.go,
+//     where every camera stored [] and recorded nothing).
+//  2. Absent — derive from the five legacy booleans, each defaulting to true, so
+//     a config written by 5.5.0 or 5.6.0 keeps behaving exactly as it did.
+//
+// The second value reports whether any resolution succeeded; false means the
+// store had nothing to say and the caller should fall back (a camera without an
+// override, for instance).
+func enabledNotifyTypes(s notifySettingsStore) (map[string]bool, bool) {
+	if s == nil {
+		return nil, false
+	}
+
+	// A sentinel distinguishes "key absent" from "key present but empty", which
+	// a plain default value cannot.
+	if raw := s.GetValue(notifyTypesKey, nil); raw != nil {
+		enabled := make(map[string]bool, len(notifyTypeOptions))
+		for _, t := range stringSliceValue(raw) {
+			if norm := strings.ToLower(strings.TrimSpace(t)); norm != "" {
+				enabled[norm] = true
+			}
+		}
+		return enabled, true
+	}
+
+	enabled := make(map[string]bool, len(notifyTypeOptions))
+	for label, key := range notifyObjectLabelKeys {
+		enabled[label] = boolValue(s.GetValue(key, true), true)
+	}
+	enabled[notifyTypeOther] = boolValue(s.GetValue(notifyOtherKey, true), true)
+	return enabled, true
+}
+
+// boolValue coerces a stored value, falling back for anything that is not a
+// bool. The bare `v, _ := x.(bool)` idiom yields false on a failed assertion,
+// which would silently silence a detection type on the strength of a malformed
+// value.
+func boolValue(v any, fallback bool) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return fallback
+}
+
+// stringSliceValue coerces whatever shape a stored list comes back as — []string
+// from a schema DefaultValue, []any once it has been through msgpack.
+func stringSliceValue(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return append([]string(nil), t...)
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // notifySettingsStore is the subset of *sdk.DeviceStorage this filter needs.
@@ -159,11 +247,17 @@ func (f *notifyLabelFilter) NotifyAllowed(event store.DetectionEvent) bool {
 		return true
 	}
 
-	settings := f.settingsFor(event.CameraID)
+	enabled, ok := enabledNotifyTypes(f.settingsFor(event.CameraID))
+	if !ok {
+		return true
+	}
 
 	var sawClassifiable bool
 	for _, label := range notifiableLabels(event) {
-		key, isObjectLabel := notifyObjectLabelKeys[label]
+		typ, isObjectLabel := label, true
+		if _, known := notifyObjectLabelKeys[label]; !known {
+			isObjectLabel = false
+		}
 		if !isObjectLabel {
 			// A known non-subject type — motion, audio, an attribute such as
 			// face/license_plate, or a trigger type such as doorbell. These
@@ -173,21 +267,11 @@ func (f *notifyLabelFilter) NotifyAllowed(event store.DetectionEvent) bool {
 			if _, known := sdk.KnownEventTypes[label]; known {
 				continue
 			}
-			key = notifyOtherKey
+			typ = notifyTypeOther
 		}
 
 		sawClassifiable = true
-
-		// A value stored as something other than a bool (a hand-edited config,
-		// or a future storage encoding) must read as ENABLED, not disabled. The
-		// bare `v, _ := x.(bool)` idiom yields false on a failed assertion,
-		// which would silently silence a whole detection type on the strength of
-		// a malformed value — exactly the failure this feature must not have.
-		enabled, ok := settings.GetValue(key, true).(bool)
-		if !ok {
-			enabled = true
-		}
-		if enabled {
+		if enabled[typ] {
 			return true
 		}
 	}
@@ -246,42 +330,29 @@ func notifiableLabels(event store.DetectionEvent) []string {
 func cameraNotifySchema() []sdk.JsonSchema {
 	storeTrue := true
 
-	overrideCondition := func() []sdk.SchemaCondition {
-		return []sdk.SchemaCondition{{
-			Key:      notifyOverrideKey,
-			Operator: sdk.SchemaConditionEq,
-			Value:    true,
-		}}
-	}
-
-	schemas := []sdk.JsonSchema{{
-		Type:         sdk.JsonSchemaTypeBoolean,
-		Key:          notifyOverrideKey,
-		Title:        "Override notifications",
-		DefaultValue: false,
-		Store:        &storeTrue,
-	}}
-
-	// Same keys as the plugin-wide toggles, deliberately: the filter reads
-	// whichever store is in effect using one set of key names, so there is no
-	// second naming scheme to keep in step.
-	for _, f := range []struct{ key, title string }{
-		{notifyPersonKey, "Person"},
-		{notifyVehicleKey, "Vehicle"},
-		{notifyAnimalKey, "Animal"},
-		{notifyPackageKey, "Package"},
-		{notifyOtherKey, "Other"},
-	} {
-		schemas = append(schemas, sdk.JsonSchema{
+	return []sdk.JsonSchema{
+		{
 			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          f.key,
-			Title:        f.title,
-			DefaultValue: true,
+			Key:          notifyOverrideKey,
+			Title:        "Override notifications",
+			DefaultValue: false,
 			Store:        &storeTrue,
-			Condition:    overrideCondition(),
-		})
+		},
+		{
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          notifyTypesKey,
+			Title:        "Notify for",
+			Enum:         notifyTypeOptions,
+			Multiple:     true,
+			DefaultValue: notifyTypeOptions,
+			Store:        &storeTrue,
+			Condition: []sdk.SchemaCondition{{
+				Key:      notifyOverrideKey,
+				Operator: sdk.SchemaConditionEq,
+				Value:    true,
+			}},
+		},
 	}
-	return schemas
 }
 
 // cameraNotifyRegistry tracks each attached camera's own settings storage, so

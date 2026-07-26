@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.7.0] - 2026-07-26
+
+### Changed
+
+- **The detection toggles are now one control.** The Detections tab had five separate boolean
+  switches, and the frontend draws each as its own bordered row — so the tab was mostly empty space.
+  They are replaced by a single **Notify for** multi-select showing the chosen types as chips, both on
+  the Detections tab and in the per-camera override panel, which drops from six controls to two.
+
+  Everything is selected by default, so a fresh install notifies exactly as before. An empty selection
+  is meaningful and preserved: it means no detection notifications, and is deliberately distinguished
+  from "never configured" rather than being papered over with a default.
+
+  Configs written by 5.5.0 or 5.6.0 are migrated on read — when the new key is absent, the five legacy
+  booleans are used, each defaulting to on. Those keys are now read-only and no longer appear in any
+  schema, so nothing writes to them again.
+
+### Fixed
+
+- **Empty help text no longer leaves a gap.** 5.6.1 removed field descriptions, but the frontend's
+  boolean field renders its description element unconditionally — unlike its string field, which
+  guards on the description being non-empty. Every toggle was therefore left with an empty hint block
+  still taking up height. Collapsing five booleans into one enum removes five of them.
+
 ## [5.6.1] - 2026-07-26
 
 ### Changed
@@ -258,6 +282,7 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
+[5.7.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.7.0
 [5.6.1]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.6.1
 [5.6.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.6.0
 [5.5.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.5.0

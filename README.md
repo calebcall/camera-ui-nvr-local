@@ -184,34 +184,30 @@ reference for what each one does, rather than help text under every field:
 
 ### Notification filtering
 
-The **Detections** tab controls which detection types produce a notification. Every toggle defaults
-to **on**, so upgrading changes nothing until you turn something off.
+The **Detections** tab controls which detection types produce a notification. Everything is selected
+by default, so upgrading changes nothing until you deselect something.
 
-| Toggle (storage key)                   | Covers                                                                        |
-| -------------------------------------- | ----------------------------------------------------------------------------- |
-| Person (`notifyPerson`)                 | `person` detections.                                                          |
-| Vehicle (`notifyVehicle`)               | `vehicle` detections. Usually the first one off for a road-facing camera.      |
-| Animal (`notifyAnimal`)                 | `animal` detections — pets, wildlife.                                         |
-| Package (`notifyPackage`)               | `package` detections.                                                         |
-| Other (`notifyOther`)                    | Labels from classifier plugins outside the standard set (a bird, a weather condition). Without this they would be the one kind of detection you could not filter. |
+| Setting (storage key)      | Meaning                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| Notify for (`notifyTypes`) | A multi-select of `person`, `vehicle`, `animal`, `package`, and `other`. All selected by default. `other` covers labels from classifier plugins outside the standard set — without it those would be the one kind of detection you could not filter. Selecting nothing means no detection notifications at all. |
 
 Three things worth knowing:
 
 - **These affect notifications only.** Recording, retention, timeline markers, thumbnails, and AI
   descriptions all continue exactly as before. A detection you don't want to be pinged about is still
   footage you'll want to review.
-- **Any enabled label allows the notification.** A person arriving in a car is one event carrying both
-  labels, so with Vehicle off you still get told about the person. Turning Vehicle off silences
+- **Any selected label allows the notification.** A person arriving in a car is one event carrying both
+  labels, so with `vehicle` deselected you still get told about the person. Deselecting it silences
   vehicle-*only* events.
-- **There is no Motion or Audio toggle**, because motion-only and audio-only events never produce a
-  notification in the first place — such a switch would do nothing.
+- **There is no motion or audio option**, because motion-only and audio-only events never produce a
+  notification in the first place — such an entry would do nothing.
 
 #### Per-camera overrides
 
 The toggles above are the default for every camera. To give one camera its own, open that camera's
 **drawer → Plugins tab → NVR (Local)** — the same place its recording mode and retention live — and
-turn on **Override notifications**. Five per-camera toggles appear; while the override is off,
-the camera follows the global settings.
+turn on **Override notifications**. A per-camera "Notify for" selector appears; while the override is
+off, the camera follows the global setting.
 
 Overrides *replace* the global settings for that camera rather than narrowing them, so a camera can
 also be **more** permissive — you can disable Vehicle globally and re-enable it on the one camera
