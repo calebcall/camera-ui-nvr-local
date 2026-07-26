@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.4.0] - 2026-07-26
+
+### Added
+
+- **GenAI provider selection.** The AI-description endpoint is now chosen from a **Provider**
+  dropdown — `openai`, `ollama`, or `gemini` — instead of being typed in as a base URL. All three
+  speak the same OpenAI-compatible `/chat/completions` API (Gemini via its OpenAI compatibility
+  layer), so this adds no provider-specific code: picking a provider resolves an endpoint and a
+  default model, and the request path is byte-for-byte the one that already worked.
+
+  The base URL field now appears **only for Ollama**, because only its host and port are genuinely
+  site-specific. The two hosted providers each have exactly one correct URL, so a field for them was
+  nothing but a way to get it subtly wrong — and a stale value left in it would silently follow the
+  user to whichever provider they picked next. Use the Ollama provider for any other
+  OpenAI-compatible runtime as well (LM Studio, vLLM, llama.cpp, OpenRouter).
+
+  The model is now stored **per provider** (`aiModelOpenAI`, `aiModelGemini`, `aiModelOllama`) rather
+  than in one shared key. A schema field carries exactly one default, so a single shared field kept
+  showing the previous provider's model after a switch — sending `gpt-5.6-luna` to Gemini, which
+  fails on every event until somebody notices and retypes it. Per-provider keys also mean a
+  hand-tuned local model name survives a round trip through the hosted providers.
+
+### Changed
+
+- **Settings are split into tabs.** The plugin's settings on Settings → Recordings now render as a
+  **Storage** tab and a **GenAI** tab instead of one tab plus two loose fields. The frontend builds
+  the tab strip from each schema field's group and renders any *ungrouped* field stranded beneath it,
+  so the recording settings — which never had a group — had been sitting below the AI section they
+  have nothing to do with. Storage is declared first and is therefore the tab that opens by default.
+
+  There is deliberately **no Faces tab**: the database tables exist but nothing reads or writes them,
+  and a tab advertising a feature that does nothing is worse than no tab. Nor a **License tab** — the
+  page already shows license status in its own card directly above these settings.
+
+### Fixed
+
+- **Upgrading from 5.3.0 no longer redirects a local setup to a paid API.** 5.3.0 had no provider
+  setting, so a user pointing the base URL at a local Ollama had no way to express that beyond the
+  URL itself. Defaulting them to OpenAI would have sent frames of their property to a third party,
+  and billed them for it, without them changing a thing. An unset provider with a base URL that
+  isn't OpenAI's is now read as Ollama. The pre-provider `aiModel` key is also still honored as a
+  fallback, so a model chosen under 5.3.0 is not silently discarded.
+
 ## [5.3.0] - 2026-07-26
 
 ### Added
@@ -130,6 +173,7 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
+[5.4.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.4.0
 [5.3.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.3.0
 [5.2.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.2.0
 [0.1.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v0.1.0

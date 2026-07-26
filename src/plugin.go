@@ -372,37 +372,71 @@ func (p *NVRPlugin) logRPC(method string, args ...string) {
 // "cap", for N times the intended total).
 const nvrQuotaGBStorageKey = "nvrQuotaGB"
 
-// aiDescriptionsGroup is the collapsible section every AI-description setting
-// is rendered under on /settings/recordings. This feature contributes nine
-// fields plus a button — more than doubling the plugin's whole settings
-// surface — and without a group they would sprawl down the page in between
-// the recording settings that have nothing to do with them, with no visual
-// hint that they only matter together.
+// Settings groups. The frontend's CuiSchema renders one TAB per distinct
+// non-empty group, in the order the fields are declared here, and renders any
+// UNGROUPED field loose underneath the whole tab strip
+// (CuiSchema.vue, groupTabs/ungroupedSchemas). Two consequences drive how these
+// are used below:
 //
-// The group title is declared here, next to the other plugin-level storage
-// keys, but the individual field keys deliberately are NOT: they live in
+//   - Every visible field must carry a group. A single ungrouped field appears
+//     stranded below the tabs, which is exactly how the storage settings
+//     looked before this existed.
+//   - Declaration order is tab order, so storageGroup's fields are emitted
+//     first to make Storage the tab that opens by default.
+//
+// Hidden fields (instanceIDStorageKey) are excluded from the tab strip by
+// CuiSchema itself, so they need no group and create no empty tab.
+//
+// The group titles are declared here, next to the other plugin-level storage
+// keys, but the individual AI field keys deliberately are NOT: they live in
 // src/describe as describe.Key* because that package both consumes them (to
 // read the values back) and owns their defaults. Keeping the key strings and
 // the code that reads them in the same package is what stops the form and the
 // reader from silently drifting apart — a renamed key here with no
 // corresponding change there would compile fine and just never read anything.
-const aiDescriptionsGroup = "AI Descriptions"
+const (
+	storageGroup = "Storage"
+	genAIGroup   = "GenAI"
+)
 
 // aiEnabledCondition hides a field until the AI-descriptions master toggle is
-// on, so an unconfigured install sees a single checkbox rather than nine
+// on, so an unconfigured install sees a single checkbox rather than a dozen
 // fields and a button it has no use for.
 //
 // Returned fresh on each call rather than shared as a package-level variable,
 // because JsonSchema.Condition is a slice: a single shared value would give
 // every field the same backing array, so anything that mutated one field's
 // condition — the frontend's schema round-trip, a future field that appends a
-// second condition — would silently rewrite the visibility rule of all nine.
+// second condition — would silently rewrite the visibility rule of all of them.
 func aiEnabledCondition() []sdk.SchemaCondition {
 	return []sdk.SchemaCondition{{
 		Key:      describe.KeyEnabled,
 		Operator: sdk.SchemaConditionEq,
 		Value:    true,
 	}}
+}
+
+// aiProviderCondition shows a field only when the master toggle is on AND the
+// selected provider is the given one. Multiple conditions are ANDed by the
+// frontend (see JsonSchema.Condition), and CuiSchema re-evaluates them against
+// live form values, so switching the provider dropdown shows and hides these
+// immediately with no save or round trip.
+//
+// This is what makes the base URL field Ollama-only, and what gives each
+// provider its own model field carrying its own correct default.
+func aiProviderCondition(provider string) []sdk.SchemaCondition {
+	return []sdk.SchemaCondition{
+		{
+			Key:      describe.KeyEnabled,
+			Operator: sdk.SchemaConditionEq,
+			Value:    true,
+		},
+		{
+			Key:      describe.KeyProvider,
+			Operator: sdk.SchemaConditionEq,
+			Value:    provider,
+		},
+	}
 }
 
 // StorageSchema declares the plugin-level storage schema. sdk.Run calls this
@@ -429,18 +463,28 @@ func aiEnabledCondition() []sdk.SchemaCondition {
 // resolveRecordingsBaseDir in recording_path.go), not a placeholder for
 // something else.
 //
-// The remaining nine fields plus the "Test Connection" button are the AI
-// Descriptions settings, all grouped under aiDescriptionsGroup and all
-// conditional on the master toggle (see aiEnabledCondition). Their keys and
-// defaults come from src/describe rather than being spelled out here, so this
-// form and the code that reads it can never disagree about either. Three
-// things about them are deliberate and worth stating, because each is the kind
-// of choice a later edit would casually undo:
+// Both storage fields carry storageGroup and the AI fields carry genAIGroup,
+// which is what makes the frontend render two tabs instead of one tab plus two
+// stranded fields — see the groups' own doc comment for why every visible field
+// needs one, and why declaration order is tab order.
 //
-//   - The toggle defaults to OFF. Turning it on with the default endpoint
+// The remaining fields plus the "Test Connection" button are the AI Descriptions
+// settings, all conditional on the master toggle (see aiEnabledCondition), with
+// the base URL and the three model fields further conditional on the selected
+// provider (aiProviderCondition). Their keys and defaults come from src/describe
+// rather than being spelled out here, so this form and the code that reads it
+// can never disagree about either. Four things about them are deliberate and
+// worth stating, because each is the kind of choice a later edit would casually
+// undo:
+//
+//   - The toggle defaults to OFF. Turning it on with the default provider
 //     sends recorded frames of your property to a third party and bills you
 //     per event; that is not a decision a plugin gets to make on a user's
 //     behalf by shipping it pre-enabled.
+//   - There is one model field PER PROVIDER, not one shared field. A JsonSchema
+//     field carries a single DefaultValue, so a shared field would keep showing
+//     the previous provider's model after a switch — sending an OpenAI model
+//     name to Gemini, which fails on every event until someone notices.
 //   - Every Description here explains the COST consequence, not just the
 //     mechanic. "Frames Per Event" is not self-evidently the difference
 //     between $0.003 and $0.012 an event, and a user who discovers that from
@@ -466,6 +510,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Description:  "Optional cap on this NVR instance's total recorded storage, across every camera. 0 disables the cap (age-based retention only); once exceeded, the oldest segments across every camera are deleted first.",
 			DefaultValue: float64(0),
 			Minimum:      sdk.Float64(0),
+			Group:        storageGroup,
 			Store:        &storeTrue,
 		},
 		{
@@ -473,50 +518,96 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Key:         recordingPathStorageKey,
 			Title:       "Recording Storage Path",
 			Description: "Optional custom directory where new recordings (and their thumbnails) are written, e.g. an external drive or network share mounted on this host. Leave empty to use this plugin's default storage location. Changing this only affects NEW recordings — existing recordings stay where they are and remain playable.",
+			Group:       storageGroup,
 			Store:       &storeTrue,
 		},
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          describe.KeyEnabled,
 			Title:        "Enable AI Descriptions",
-			Description:  "Generate a written description of each detection event using a vision model, shown on event cards, in the recordings list, and over the player. OFF by default: with the default settings below this sends recorded frames to OpenAI's paid API and costs roughly $0.003-0.006 per event. Point the endpoint at a local Ollama instead to keep everything on your own hardware for free.",
+			Description:  "Generate a written description of each detection event using a vision model, shown on event cards, in the recordings list, and over the player. OFF by default: with the default provider below this sends recorded frames to OpenAI's paid API and costs roughly $0.003-0.006 per event. Choose the Ollama provider instead to keep everything on your own hardware for free.",
 			DefaultValue: false,
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
 		},
 		{
 			Type:         sdk.JsonSchemaTypeString,
-			Key:          describe.KeyBaseURL,
-			Title:        "API Base URL",
-			Description:  "Any OpenAI-compatible endpoint. Use https://api.openai.com/v1 for OpenAI, or http://localhost:11434/v1 for a local Ollama (also works with LM Studio, vLLM, llama.cpp, and OpenRouter).",
-			Placeholder:  describe.DefaultBaseURL,
-			DefaultValue: describe.DefaultBaseURL,
+			Key:          describe.KeyProvider,
+			Title:        "Provider",
+			Description:  "Where descriptions are generated. OpenAI and Gemini are hosted, cost money per event, and receive frames of whatever your cameras see. Ollama runs on your own hardware for free and sends nothing off your network. All three speak the same API, so switching is just this dropdown.",
+			Enum:         []string{describe.ProviderOpenAI, describe.ProviderOllama, describe.ProviderGemini},
+			DefaultValue: describe.DefaultProvider,
 			Required:     true,
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
 			Condition:    aiEnabledCondition(),
+		},
+		{
+			// Ollama only. The hosted providers each have exactly one correct
+			// base URL, which describe.resolveBaseURL supplies as a constant —
+			// showing a field for it would only create a way to get it wrong,
+			// and a stale value left in it would follow the user to the next
+			// provider they picked.
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          describe.KeyBaseURL,
+			Title:        "Ollama Base URL",
+			Description:  "Where your Ollama server is reachable, including the /v1 suffix. Any other OpenAI-compatible runtime works here too — LM Studio, vLLM, llama.cpp — so use this provider for those as well.",
+			Placeholder:  describe.DefaultOllamaBaseURL,
+			DefaultValue: describe.DefaultOllamaBaseURL,
+			Required:     true,
+			Group:        genAIGroup,
+			Store:        &storeTrue,
+			Condition:    aiProviderCondition(describe.ProviderOllama),
 		},
 		{
 			Type:        sdk.JsonSchemaTypeString,
 			Key:         describe.KeyAPIKey,
 			Title:       "API Key",
-			Description: "Required for hosted providers like OpenAI. Leave empty for a local endpoint that doesn't authenticate, such as a default Ollama install.",
+			Description: "Required for OpenAI and Gemini. Leave empty for a local Ollama, which does not authenticate by default.",
 			Format:      sdk.StringFormatPassword,
-			Group:       aiDescriptionsGroup,
+			Group:       genAIGroup,
 			Store:       &storeTrue,
 			Condition:   aiEnabledCondition(),
 		},
 		{
+			// One model field per provider, rather than one shared field, so
+			// each can carry its own correct DefaultValue. A single field would
+			// leave the previous provider's model behind after a switch —
+			// sending "gpt-5.6-luna" to Gemini, which 404s on every event.
 			Type:         sdk.JsonSchemaTypeString,
-			Key:          describe.KeyModel,
+			Key:          describe.KeyModelOpenAI,
 			Title:        "Model",
-			Description:  "A vision-capable model. Defaults to " + describe.DefaultModel + ", OpenAI's cost-efficient high-volume tier; move up to gpt-5.6-terra if descriptions read too generic. For Ollama use a local vision model name such as qwen2.5vl:7b.",
-			Placeholder:  describe.DefaultModel,
-			DefaultValue: describe.DefaultModel,
+			Description:  "A vision-capable OpenAI model. " + describe.DefaultModelOpenAI + " is the cost-efficient high-volume tier; move up to gpt-5.6-terra if descriptions read too generic.",
+			Placeholder:  describe.DefaultModelOpenAI,
+			DefaultValue: describe.DefaultModelOpenAI,
 			Required:     true,
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
-			Condition:    aiEnabledCondition(),
+			Condition:    aiProviderCondition(describe.ProviderOpenAI),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          describe.KeyModelGemini,
+			Title:        "Model",
+			Description:  "A vision-capable Gemini model. " + describe.DefaultModelGemini + " is the cheapest current tier; gemini-3.5-flash reasons noticeably better on ambiguous scenes for more per event.",
+			Placeholder:  describe.DefaultModelGemini,
+			DefaultValue: describe.DefaultModelGemini,
+			Required:     true,
+			Group:        genAIGroup,
+			Store:        &storeTrue,
+			Condition:    aiProviderCondition(describe.ProviderGemini),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          describe.KeyModelOllama,
+			Title:        "Model",
+			Description:  "A vision-capable model you have already pulled on that server. " + describe.DefaultModelOllama + " is a reasonable starting point. A model you have not pulled returns a clear error from Ollama — use Test Connection to check before waiting on a real event.",
+			Placeholder:  describe.DefaultModelOllama,
+			DefaultValue: describe.DefaultModelOllama,
+			Required:     true,
+			Group:        genAIGroup,
+			Store:        &storeTrue,
+			Condition:    aiProviderCondition(describe.ProviderOllama),
 		},
 		{
 			Type:         sdk.JsonSchemaTypeNumber,
@@ -527,7 +618,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Minimum:      sdk.Float64(1),
 			Maximum:      sdk.Float64(8),
 			Step:         sdk.Float64(1),
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
 			Condition:    aiEnabledCondition(),
 		},
@@ -537,7 +628,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Title:       "Only Describe These Labels",
 			Description: "Comma-separated detection labels, e.g. \"person,vehicle\". Leave empty to describe every detection event. A real cost control, not a nicety: a camera facing a public road can otherwise generate thousands of paid requests a day.",
 			Placeholder: "person,vehicle",
-			Group:       aiDescriptionsGroup,
+			Group:       genAIGroup,
 			Store:       &storeTrue,
 			Condition:   aiEnabledCondition(),
 		},
@@ -550,7 +641,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Minimum:      sdk.Float64(0),
 			Maximum:      sdk.Float64(1),
 			Step:         sdk.Float64(0.05),
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
 			Condition:    aiEnabledCondition(),
 		},
@@ -562,7 +653,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			DefaultValue: float64(describe.DefaultTimeoutSeconds),
 			Minimum:      sdk.Float64(10),
 			Maximum:      sdk.Float64(600),
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
 			Condition:    aiEnabledCondition(),
 		},
@@ -575,7 +666,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Minimum:      sdk.Float64(1),
 			Maximum:      sdk.Float64(64),
 			Step:         sdk.Float64(1),
-			Group:        aiDescriptionsGroup,
+			Group:        genAIGroup,
 			Store:        &storeTrue,
 			Condition:    aiEnabledCondition(),
 		},
@@ -585,7 +676,7 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Title:       "Test Connection",
 			Description: "Sends one tiny image to the endpoint above and reports what came back. Use this to tell a wrong URL, a bad key, a missing model, and a text-only model apart.",
 			Color:       sdk.ButtonColorInfo,
-			Group:       aiDescriptionsGroup,
+			Group:       genAIGroup,
 			Condition:   aiEnabledCondition(),
 			OnClick:     p.testAIConnection,
 		},
@@ -645,13 +736,17 @@ func (p *NVRPlugin) testAIConnection(_ any) *sdk.FormSubmitResponse {
 
 	desc, err := describe.NewClient().Complete(ctx, cfg, "This is a connection test. Describe this image in one short sentence.", [][]byte{frame})
 	if err != nil {
-		return aiToast(sdk.ToastError, fmt.Sprintf("%s failed: %v", cfg.Model, err))
+		// Naming the provider AND the resolved base URL matters here: with the
+		// base URL now derived rather than typed, an error mentioning only the
+		// model gives no clue whether the request even went where the user
+		// thinks it did.
+		return aiToast(sdk.ToastError, fmt.Sprintf("%s (%s at %s) failed: %v", cfg.Model, cfg.Provider, cfg.BaseURL, err))
 	}
 
 	// Echoing the model's own Title back proves the whole round trip: the
 	// server was reachable, the key was accepted, the model exists, it could
 	// see the image, and it returned JSON in the shape this plugin parses.
-	return aiToast(sdk.ToastSuccess, fmt.Sprintf("%s responded: %s", cfg.Model, desc.Title))
+	return aiToast(sdk.ToastSuccess, fmt.Sprintf("%s (%s) responded: %s", cfg.Model, cfg.Provider, desc.Title))
 }
 
 // aiToast wraps one message in the FormSubmitResponse shape the settings form

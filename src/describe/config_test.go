@@ -312,3 +312,308 @@ func TestQueueDepth_DefaultsAndClamps(t *testing.T) {
 		})
 	}
 }
+
+// TestLoad_NothingStored_DefaultsToOpenAI pins the provider default alongside
+// what it implies. The provider is not just a label: it decides the endpoint and
+// the model, so a wrong default here silently points a fresh install at the
+// wrong service.
+func TestLoad_NothingStored_DefaultsToOpenAI(t *testing.T) {
+	c := Load(fakeGetter{})
+
+	if c.Provider != ProviderOpenAI {
+		t.Errorf("Provider = %q, want %q", c.Provider, ProviderOpenAI)
+	}
+	if c.BaseURL != DefaultOpenAIBaseURL {
+		t.Errorf("BaseURL = %q, want %q", c.BaseURL, DefaultOpenAIBaseURL)
+	}
+	if c.Model != DefaultModelOpenAI {
+		t.Errorf("Model = %q, want %q", c.Model, DefaultModelOpenAI)
+	}
+}
+
+// TestLoad_EachProvider_ResolvesItsOwnEndpointAndModel is the core of the
+// provider mapping: picking a provider must be sufficient to reach it, with no
+// other field required.
+func TestLoad_EachProvider_ResolvesItsOwnEndpointAndModel(t *testing.T) {
+	for _, tc := range []struct {
+		provider    string
+		wantBaseURL string
+		wantModel   string
+	}{
+		{ProviderOpenAI, DefaultOpenAIBaseURL, DefaultModelOpenAI},
+		{ProviderGemini, DefaultGeminiBaseURL, DefaultModelGemini},
+		{ProviderOllama, DefaultOllamaBaseURL, DefaultModelOllama},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			c := Load(fakeGetter{KeyProvider: tc.provider})
+
+			if c.Provider != tc.provider {
+				t.Errorf("Provider = %q, want %q", c.Provider, tc.provider)
+			}
+			if c.BaseURL != tc.wantBaseURL {
+				t.Errorf("BaseURL = %q, want %q", c.BaseURL, tc.wantBaseURL)
+			}
+			if c.Model != tc.wantModel {
+				t.Errorf("Model = %q, want %q", c.Model, tc.wantModel)
+			}
+		})
+	}
+}
+
+// TestLoad_HostedProviders_IgnoreAStoredBaseURL is the test that makes provider
+// switching safe. KeyBaseURL persists after a user has been on Ollama, so if the
+// hosted providers read it, selecting OpenAI would keep POSTing to localhost —
+// or worse, a stale hosted URL would be sent an API key meant for someone else.
+// Only Ollama may read that field.
+func TestLoad_HostedProviders_IgnoreAStoredBaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		want     string
+	}{
+		{ProviderOpenAI, DefaultOpenAIBaseURL},
+		{ProviderGemini, DefaultGeminiBaseURL},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			c := Load(fakeGetter{
+				KeyProvider: tc.provider,
+				KeyBaseURL:  "http://leftover-ollama.local:11434/v1",
+			})
+			if c.BaseURL != tc.want {
+				t.Errorf("BaseURL = %q, want %q (the stored value must be ignored)", c.BaseURL, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_OllamaBaseURL_IsNormalizedAndFallsBack covers the one provider whose
+// base URL is a real user-supplied field.
+func TestLoad_OllamaBaseURL_IsNormalizedAndFallsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stored any
+		want   string
+	}{
+		{"trimmed and de-slashed", "  http://box.local:11434/v1/  ", "http://box.local:11434/v1"},
+		{"blank falls back", "   ", DefaultOllamaBaseURL},
+		{"absent falls back", nil, DefaultOllamaBaseURL},
+		{"wrong type falls back", 42, DefaultOllamaBaseURL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := fakeGetter{KeyProvider: ProviderOllama}
+			if tc.stored != nil {
+				g[KeyBaseURL] = tc.stored
+			}
+			if got := Load(g).BaseURL; got != tc.want {
+				t.Errorf("BaseURL = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_ProviderValue_IsNormalizedAndValidated keeps a stored provider that
+// the resolver does not recognize from becoming a silent OpenAI charge. Falling
+// back is the right behavior (a Config that cannot be loaded would disable the
+// feature outright), but it must be the DOCUMENTED fallback rather than an
+// accident of string comparison.
+func TestLoad_ProviderValue_IsNormalizedAndValidated(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stored any
+		want   string
+	}{
+		{"exact", ProviderGemini, ProviderGemini},
+		{"mixed case", "OpenAI", ProviderOpenAI},
+		{"padded", "  ollama  ", ProviderOllama},
+		{"unknown", "anthropic", DefaultProvider},
+		{"empty", "", DefaultProvider},
+		{"wrong type", 7, DefaultProvider},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Load(fakeGetter{KeyProvider: tc.stored}).Provider; got != tc.want {
+				t.Errorf("Provider = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_LegacyConfigWithoutProvider_InfersOllamaFromTheBaseURL covers the
+// 5.3.0 upgrade path, and it is the highest-consequence test in this file.
+//
+// 5.3.0 had no provider setting, only a free-text base URL. A user who pointed
+// it at a local Ollama has KeyBaseURL set and KeyProvider unset. Defaulting that
+// to OpenAI would redirect a deliberately local, free, private setup to a paid
+// API that also ships frames of their property off-site — without them changing
+// anything. So an unset provider plus a non-OpenAI base URL reads as Ollama.
+func TestLoad_LegacyConfigWithoutProvider_InfersOllamaFromTheBaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		storedURL    any
+		wantProvider string
+		wantBaseURL  string
+	}{
+		{
+			"local ollama url infers ollama",
+			"http://localhost:11434/v1",
+			ProviderOllama,
+			"http://localhost:11434/v1",
+		},
+		{
+			"any other host infers ollama",
+			"http://gpu-box.lan:8000/v1",
+			ProviderOllama,
+			"http://gpu-box.lan:8000/v1",
+		},
+		{
+			"the openai default stays openai",
+			DefaultOpenAIBaseURL,
+			ProviderOpenAI,
+			DefaultOpenAIBaseURL,
+		},
+		{
+			"the openai default with a trailing slash still stays openai",
+			DefaultOpenAIBaseURL + "/",
+			ProviderOpenAI,
+			DefaultOpenAIBaseURL,
+		},
+		{
+			"nothing stored at all stays openai",
+			nil,
+			ProviderOpenAI,
+			DefaultOpenAIBaseURL,
+		},
+		{
+			"a blank base url stays openai",
+			"  ",
+			ProviderOpenAI,
+			DefaultOpenAIBaseURL,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := fakeGetter{}
+			if tc.storedURL != nil {
+				g[KeyBaseURL] = tc.storedURL
+			}
+
+			c := Load(g)
+			if c.Provider != tc.wantProvider {
+				t.Errorf("Provider = %q, want %q", c.Provider, tc.wantProvider)
+			}
+			if c.BaseURL != tc.wantBaseURL {
+				t.Errorf("BaseURL = %q, want %q", c.BaseURL, tc.wantBaseURL)
+			}
+		})
+	}
+}
+
+// TestLoad_ExplicitProvider_BeatsTheLegacyInference makes the inference strictly
+// a migration aid. Once the user has chosen a provider it is authoritative —
+// including choosing OpenAI while an Ollama base URL is still stored, which is
+// exactly what happens the first time someone switches away from Ollama.
+func TestLoad_ExplicitProvider_BeatsTheLegacyInference(t *testing.T) {
+	c := Load(fakeGetter{
+		KeyProvider: ProviderOpenAI,
+		KeyBaseURL:  "http://localhost:11434/v1",
+	})
+
+	if c.Provider != ProviderOpenAI {
+		t.Errorf("Provider = %q, want %q", c.Provider, ProviderOpenAI)
+	}
+	if c.BaseURL != DefaultOpenAIBaseURL {
+		t.Errorf("BaseURL = %q, want %q", c.BaseURL, DefaultOpenAIBaseURL)
+	}
+}
+
+// TestLoad_ModelKeys_PreferProviderSpecificThenLegacyThenDefault pins the
+// three-step model resolution. The legacy step exists so a model chosen under
+// 5.3.0 is not silently discarded on upgrade; the per-provider step exists so
+// switching providers cannot carry the wrong model along.
+func TestLoad_ModelKeys_PreferProviderSpecificThenLegacyThenDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store fakeGetter
+		want  string
+	}{
+		{
+			"provider specific wins over legacy",
+			fakeGetter{KeyProvider: ProviderOpenAI, KeyModelOpenAI: "gpt-5.6-terra", KeyModel: "old-model"},
+			"gpt-5.6-terra",
+		},
+		{
+			"legacy is used when the provider key is empty",
+			fakeGetter{KeyProvider: ProviderOpenAI, KeyModel: "gpt-5.6-terra"},
+			"gpt-5.6-terra",
+		},
+		{
+			"legacy applies to gemini too",
+			fakeGetter{KeyProvider: ProviderGemini, KeyModel: "gemini-3.5-flash"},
+			"gemini-3.5-flash",
+		},
+		{
+			"blank provider key falls through to legacy",
+			fakeGetter{KeyProvider: ProviderOllama, KeyModelOllama: "   ", KeyModel: "llava:13b"},
+			"llava:13b",
+		},
+		{
+			"blank both falls through to the provider default",
+			fakeGetter{KeyProvider: ProviderOllama, KeyModelOllama: "  ", KeyModel: "  "},
+			DefaultModelOllama,
+		},
+		{
+			"values are trimmed",
+			fakeGetter{KeyProvider: ProviderOllama, KeyModelOllama: "  llava:13b  "},
+			"llava:13b",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Load(tc.store).Model; got != tc.want {
+				t.Errorf("Model = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_SwitchingProvider_DoesNotLeakAnotherProvidersModel is the behavioral
+// reason the model is stored per provider rather than in one shared key. With a
+// single key, configuring Ollama and then selecting Gemini would send
+// "qwen2.5vl:7b" to Google and fail on every event until someone noticed.
+//
+// The legacy key is deliberately absent here: it is a cross-provider fallback by
+// design, so including it would mask the very leak being tested.
+func TestLoad_SwitchingProvider_DoesNotLeakAnotherProvidersModel(t *testing.T) {
+	stored := fakeGetter{
+		KeyModelOpenAI: "gpt-5.6-terra",
+		KeyModelOllama: "qwen2.5vl:7b",
+	}
+
+	for _, tc := range []struct {
+		provider string
+		want     string
+	}{
+		{ProviderOpenAI, "gpt-5.6-terra"},
+		{ProviderOllama, "qwen2.5vl:7b"},
+		// Never configured, so it must land on its own default rather than
+		// inheriting either of the two above.
+		{ProviderGemini, DefaultModelGemini},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			stored[KeyProvider] = tc.provider
+			if got := Load(stored).Model; got != tc.want {
+				t.Errorf("Model = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_EveryProvider_ProducesAValidConfig guards against a provider that
+// resolves to something Validate rejects, which would disable the feature with a
+// log line rather than an obvious failure. Picking any provider from the dropdown
+// must be enough to make the feature runnable.
+func TestLoad_EveryProvider_ProducesAValidConfig(t *testing.T) {
+	for _, provider := range []string{ProviderOpenAI, ProviderOllama, ProviderGemini} {
+		t.Run(provider, func(t *testing.T) {
+			if err := Load(fakeGetter{KeyProvider: provider}).Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}

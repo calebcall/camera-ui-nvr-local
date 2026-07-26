@@ -164,7 +164,13 @@ wrong (see [Important: the package name](#important-the-package-name)).
 
 ## Configuration
 
-Configured from the camera.ui **Settings → Recordings** page:
+Configured from the camera.ui **Settings → Recordings** page, under *Global Settings*. The settings
+are split into two tabs:
+
+- **Storage** — where recordings go and how much disk they may use.
+- **GenAI** — [AI event descriptions](#ai-event-descriptions), off by default.
+
+**Storage tab:**
 
 | Setting         | Meaning                                                                                  |
 | --------------- | ---------------------------------------------------------------------------------------- |
@@ -182,16 +188,39 @@ chronological narrative, a notification-length summary, and a threat level (0 no
 2 a genuine threat). No frontend changes were needed for any of it — camera.ui already reads
 `segments[].description` and renders it on event cards, in the recordings list, and over the player.
 
-Settings live on the same **Settings → Recordings** page, in a collapsible **AI Descriptions** group.
-Every field below is hidden until the master toggle is on, and every one of them except the queue
-depth takes effect on the *next* event — no restart:
+Settings live on the **GenAI** tab of the same **Settings → Recordings** page. Every field below is
+hidden until the master toggle is on, and every one of them except the queue depth takes effect on
+the *next* event — no restart.
+
+#### Choosing a provider
+
+Pick a **Provider** and the endpoint is set for you. All three speak the same OpenAI-compatible
+`/chat/completions` API — Gemini via its OpenAI compatibility layer — so switching is just the
+dropdown, and there is no provider-specific code in the plugin at all.
+
+| Provider | Endpoint                                                       | Default model           | Cost                                        |
+| -------- | -------------------------------------------------------------- | ----------------------- | ------------------------------------------- |
+| `openai` | `https://api.openai.com/v1`                                    | `gpt-5.6-luna`          | paid, ~$0.003-0.006/event                   |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai`      | `gemini-3.5-flash-lite` | paid, roughly comparable                    |
+| `ollama` | whatever you enter                                             | `qwen2.5vl:7b`          | **free, and nothing leaves your network**   |
+
+The base URL field appears **only for Ollama**, because only its host and port are site-specific —
+the two hosted providers have exactly one correct URL each, so a field for them would only be a way
+to get it subtly wrong. Use the Ollama provider for any other OpenAI-compatible runtime too (LM
+Studio, vLLM, llama.cpp, OpenRouter): point the base URL at it and set the model name accordingly.
+
+The **model is remembered per provider**, so switching to Gemini and back to Ollama doesn't lose the
+local model name you tuned — and never sends one provider's model to another.
+
+#### All GenAI settings
 
 | Setting (storage key)                            | Default                     | Meaning                                                                                                                                                                                                                       |
 | ------------------------------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Enable AI Descriptions (`aiDescriptionsEnabled`) | off                         | Master switch. While it's off nothing is sampled, nothing is sent, and nothing is billed.                                                                                                                                       |
-| API Base URL (`aiBaseURL`)                       | `https://api.openai.com/v1` | Any OpenAI-compatible `/chat/completions` endpoint — OpenAI, Ollama, LM Studio, vLLM, llama.cpp, OpenRouter. A trailing slash is stripped for you.                                                                              |
-| API Key (`aiAPIKey`)                             | empty                       | Sent as `Authorization: Bearer …`. Leave empty for a local endpoint that doesn't authenticate — the header is then omitted entirely. Rendered masked, but stored in the same plaintext plugin storage as every other setting.    |
-| Model (`aiModel`)                                | `gpt-5.6-luna`              | Must be **vision-capable**. `gpt-5.6-terra` reads less generic and costs more; for Ollama use a local vision model such as `qwen2.5vl:7b`.                                                                                      |
+| Provider (`aiProvider`)                          | `openai`                    | `openai`, `ollama`, or `gemini`. Determines the endpoint and which model field is shown.                                                                                                                                        |
+| Ollama Base URL (`aiBaseURL`)                    | `http://localhost:11434/v1` | **Ollama only.** Include the `/v1` suffix; a trailing slash is stripped for you. Ignored entirely by the hosted providers.                                                                                                      |
+| API Key (`aiAPIKey`)                             | empty                       | Sent as `Authorization: Bearer …`. Required for OpenAI and Gemini; leave empty for a local Ollama and the header is omitted entirely. Rendered masked, but stored in the same plaintext plugin storage as every other setting.    |
+| Model (`aiModelOpenAI` / `aiModelGemini` / `aiModelOllama`) | per provider, above | Must be **vision-capable**. One field is shown, matching the selected provider; the other two keep their own values.                                                                                                            |
 | Frames Per Event (`aiFrameCount`)                | 4 (1-8)                     | Frames sampled evenly across the event's time window and sent in one request. The biggest cost lever here.                                                                                                                      |
 | Only Describe These Labels (`aiLabels`)          | empty                       | Comma-separated and case-insensitive, e.g. `person,vehicle`. Empty describes every detection event.                                                                                                                             |
 | Minimum Confidence (`aiMinConfidence`)           | 0 (0-1)                     | Skips events whose best detection scores below this — the same score the recordings list filters on.                                                                                                                            |
@@ -229,10 +258,11 @@ Treat all of those numbers as estimates. Image tokens dominate the cost of a req
 with resolution, so your actual per-event price depends on your cameras and on how the provider
 happens to tile the frames.
 
-> **To keep everything local and free**, run [Ollama](https://ollama.com) with a vision model, set the
-> base URL to `http://localhost:11434/v1` and the model to something like `qwen2.5vl:7b`, and leave
-> the API key empty. Nothing leaves your network and the only cost is your own GPU time. The plugin
-> talks the same OpenAI-compatible protocol either way, so nothing else changes.
+> **To keep everything local and free**, run [Ollama](https://ollama.com) with a vision model, then
+> set **Provider** to `ollama`, check the base URL matches where your server is listening, and set the
+> model to something you have pulled (e.g. `ollama pull qwen2.5vl:7b`). Leave the API key empty.
+> Nothing leaves your network and the only cost is your own GPU time. The plugin talks the same
+> OpenAI-compatible protocol either way, so nothing else changes.
 
 Generation is **forward-only**:
 
