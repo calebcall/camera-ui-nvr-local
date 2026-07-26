@@ -52,7 +52,7 @@ func (f *fakeCameraNames) CameraName(cameraID string) (string, bool) {
 func TestDetectionEventIngester_Notify_ObjectEventTerminalMessagePublishesOnce(t *testing.T) {
 	notifier := &fakeNotifier{}
 	names := &fakeCameraNames{names: map[string]string{"cam1": "Sideyard"}}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, names, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, names, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -89,7 +89,7 @@ func TestDetectionEventIngester_Notify_ObjectEventTerminalMessagePublishesOnce(t
 // notify).
 func TestDetectionEventIngester_Notify_MotionOnlyEventNeverPublishes(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -106,7 +106,7 @@ func TestDetectionEventIngester_Notify_MotionOnlyEventNeverPublishes(t *testing.
 // non-object-detection gate as motion-only.
 func TestDetectionEventIngester_Notify_AudioOnlyEventNeverPublishes(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -123,7 +123,7 @@ func TestDetectionEventIngester_Notify_AudioOnlyEventNeverPublishes(t *testing.T
 // NOT publish — only the terminal message does.
 func TestDetectionEventIngester_Notify_NonTerminalMessagesNeverPublish(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateActive,
@@ -145,7 +145,7 @@ func TestDetectionEventIngester_Notify_NonTerminalMessagesNeverPublish(t *testin
 // second time.
 func TestDetectionEventIngester_Notify_DuplicateTerminalMessageDoesNotDoublePublish(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
 
 	end := sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -163,7 +163,7 @@ func TestDetectionEventIngester_Notify_DuplicateTerminalMessageDoesNotDoublePubl
 // a nil notifier (the default for tests, or a host build that never wired
 // api.NotificationManager) is a safe no-op rather than a nil-pointer panic.
 func TestDetectionEventIngester_Notify_NilNotifierNeverPublishesOrPanics(t *testing.T) {
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -179,7 +179,7 @@ func TestDetectionEventIngester_Notify_NilNotifierNeverPublishesOrPanics(t *test
 // notify.
 func TestDetectionEventIngester_Notify_UnresolvedCameraNameFallsBackToID(t *testing.T) {
 	notifier := &fakeNotifier{}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
@@ -201,7 +201,7 @@ func TestDetectionEventIngester_Notify_UnresolvedCameraNameFallsBackToID(t *test
 // through.
 func TestDetectionEventIngester_Notify_PublishErrorIsSwallowed(t *testing.T) {
 	notifier := &fakeNotifier{publishErr: errors.New("boom")}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, notifier, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,

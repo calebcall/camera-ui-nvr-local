@@ -178,6 +178,22 @@ type NVRPlugin struct {
 	// that construct NVRPlugin directly rather than through NewPlugin.
 	thumbs *media.Generator
 
+	// describer generates AI descriptions of detection events (Feature: AI
+	// Descriptions, src/describe) via a user-configured OpenAI-compatible
+	// vision endpoint, and persists them through p.events.SetDescription —
+	// dispatched from attachDetectionIngestion via
+	// detectionEventIngester.describe on every DetectionEvent lifecycle
+	// message.
+	//
+	// Constructed alongside p.thumbs whenever the store opened, and always
+	// constructed there even when the feature is switched OFF: the enabled
+	// check lives inside DescribeAsync (read per event) so the setting
+	// applies without a plugin restart, and an idle Describer costs nothing
+	// but an empty channel and one parked goroutine. nil whenever db is nil
+	// (same guard as events/segments/thumbs above), and also nil in unit
+	// tests that construct NVRPlugin directly rather than through NewPlugin.
+	describer *describe.Describer
+
 	// detectionSubs tracks the per-camera sdk.Disposable returned by
 	// CameraDevice.OnDetectionEvent so OnCameraReleased can unsubscribe
 	// exactly the released camera (see events_ingest.go).
@@ -774,6 +790,30 @@ func NewPlugin(logger *sdk.Logger, api *sdk.PluginAPI, storage *sdk.DeviceStorag
 		// base dir is actually configured.
 		p.thumbs = media.NewGenerator(p.recordingsDir, ff.Path(), p.segments, p.events, p.Logger)
 
+		// Wires detectionEventIngester's AI description generation (Feature:
+		// AI Descriptions, events_ingest.go's describe): a
+		// media.FrameSampler over the same p.segments and resolved ffmpeg
+		// binary ff.Path() that p.thumbs above already uses — sampling
+		// several frames across an event's window is the same "look up the
+		// covering segment, exec ffmpeg against it" shape as generating one
+		// thumbnail from it — plus p.events to persist the result
+		// (SetDescription, its own column so Upsert can't clobber it),
+		// p.recorder to resolve a camera's display name for the prompt
+		// (CameraName: "Sideyard" is a location a model can reason about, a
+		// UUID isn't), and p.store — this plugin's OWN instance-level
+		// DeviceStorage, not any camera's — as the settings source, which
+		// describe re-reads per event so a settings edit needs no restart.
+		//
+		// Constructed unconditionally, even with aiDescriptionsEnabled
+		// false: see the describer field's own doc comment.
+		p.describer = describe.NewDescriber(
+			p.store,
+			media.NewFrameSampler(ff.Path(), p.segments, p.Logger),
+			p.events,
+			p.recorder,
+			p.Logger,
+		)
+
 		// Wires NvrScrub/NvrPreviewFrames (rpc_playback.go, Task SCRUB):
 		// same p.segments (via CoveringSegmentForRole) and resolved
 		// ffmpeg binary as p.thumbs above, since scrub/preview frame
@@ -857,6 +897,17 @@ func NewPlugin(logger *sdk.Logger, api *sdk.PluginAPI, storage *sdk.DeviceStorag
 		p.recorder.StopReconcile()
 		p.recorder.StopAll()
 		p.recorder.StopRetention()
+		// Close stops the Describer accepting new work (a detection callback
+		// arriving after this point has its event dropped, deliberately and
+		// safely — see Describer.Close), lets its worker drain whatever is
+		// already queued, and blocks until that worker has exited. Called
+		// BEFORE db.Close below for the same reason StopAll is: an in-flight
+		// SetDescription must not still be writing into a connection that has
+		// already gone away. Bounded by one event's remaining aiTimeoutSeconds
+		// plus the queued events behind it.
+		if p.describer != nil {
+			p.describer.Close()
+		}
 		if p.db != nil {
 			if err := p.db.Close(); err != nil {
 				p.Logger.Error("nvr-local: close store failed:", err)
@@ -1117,6 +1168,19 @@ func (p *NVRPlugin) attachDetectionIngestion(cam *sdk.CameraDevice) {
 	// satisfies cameraNamer directly (recorder.RecorderManager.CameraName),
 	// so notify (events_ingest.go) can title a notification with a camera's
 	// real display name instead of falling back to its bare ID.
-	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, p.Logger)
+	//
+	// p.describer (Feature: AI Descriptions) is wrapped into the
+	// eventDescriber interface only when it's actually non-nil, for the
+	// identical typed-nil reason documented for thumbs above: describe's
+	// nil-check (i.describer == nil) compares the *interface* to nil, and an
+	// interface holding a typed nil *describe.Describer would compare != nil
+	// and then nil-pointer-panic on the first DescribeAsync call. Set
+	// alongside p.thumbs/p.events in NewPlugin (all nil together whenever
+	// store.Open failed), so this is defensive in the same cheap way.
+	var describer eventDescriber
+	if p.describer != nil {
+		describer = p.describer
+	}
+	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, p.Logger)
 	p.detectionSubs.add(cam.ID(), cam.OnDetectionEvent(ingester.handle))
 }
