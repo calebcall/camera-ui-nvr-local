@@ -257,8 +257,7 @@ func cameraNotifySchema() []sdk.JsonSchema {
 	schemas := []sdk.JsonSchema{{
 		Type:         sdk.JsonSchemaTypeBoolean,
 		Key:          notifyOverrideKey,
-		Title:        "Override notification settings",
-		Description:  "By default this camera follows the global Detections settings on Settings → Recordings. Turn this on to give it its own.",
+		Title:        "Override notifications",
 		DefaultValue: false,
 		Store:        &storeTrue,
 	}}
@@ -266,18 +265,17 @@ func cameraNotifySchema() []sdk.JsonSchema {
 	// Same keys as the plugin-wide toggles, deliberately: the filter reads
 	// whichever store is in effect using one set of key names, so there is no
 	// second naming scheme to keep in step.
-	for _, f := range []struct{ key, title, description string }{
-		{notifyPersonKey, "Notify: Person", "Send a notification when a person is detected on this camera."},
-		{notifyVehicleKey, "Notify: Vehicle", "Send a notification when a vehicle is detected on this camera."},
-		{notifyAnimalKey, "Notify: Animal", "Send a notification when an animal is detected on this camera."},
-		{notifyPackageKey, "Notify: Package", "Send a notification when a package is detected on this camera."},
-		{notifyOtherKey, "Notify: Other detections", "Send a notification for detection types outside the standard set on this camera."},
+	for _, f := range []struct{ key, title string }{
+		{notifyPersonKey, "Person"},
+		{notifyVehicleKey, "Vehicle"},
+		{notifyAnimalKey, "Animal"},
+		{notifyPackageKey, "Package"},
+		{notifyOtherKey, "Other"},
 	} {
 		schemas = append(schemas, sdk.JsonSchema{
 			Type:         sdk.JsonSchemaTypeBoolean,
 			Key:          f.key,
 			Title:        f.title,
-			Description:  f.description + " Affects notifications only — recording, the timeline, and AI descriptions are unaffected.",
 			DefaultValue: true,
 			Store:        &storeTrue,
 			Condition:    overrideCondition(),
