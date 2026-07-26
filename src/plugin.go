@@ -396,7 +396,15 @@ const nvrQuotaGBStorageKey = "nvrQuotaGB"
 // corresponding change there would compile fine and just never read anything.
 const (
 	storageGroup = "Storage"
-	genAIGroup   = "GenAI"
+
+	// detectionsGroup holds everything about which detections this plugin acts
+	// on. Today that is the per-type notification toggles (notify_filter.go);
+	// face-recognition settings belong here too when they exist, rather than in
+	// a tab of their own — faces are a detection concern, and splitting
+	// detection settings across two tabs would make neither complete.
+	detectionsGroup = "Detections"
+
+	genAIGroup = "GenAI"
 )
 
 // aiEnabledCondition hides a field until the AI-descriptions master toggle is
@@ -520,6 +528,65 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Description: "Optional custom directory where new recordings (and their thumbnails) are written, e.g. an external drive or network share mounted on this host. Leave empty to use this plugin's default storage location. Changing this only affects NEW recordings — existing recordings stay where they are and remain playable.",
 			Group:       storageGroup,
 			Store:       &storeTrue,
+		},
+		// Detections tab: which detection types are worth a notification. All
+		// default to ON so that upgrading changes nothing — a user who never
+		// opens this tab keeps getting exactly the notifications they got
+		// before it existed.
+		//
+		// These affect NOTIFICATIONS ONLY. Recording, retention, timeline
+		// markers, thumbnails, and AI descriptions are unaffected: a detection
+		// you don't want to be pinged about is still footage you'll want to
+		// review. Each Description says so, because "Animal: off" could
+		// otherwise reasonably be read as "stop recording animals".
+		//
+		// There is deliberately no Motion or Audio toggle — see the storage-key
+		// block in notify_filter.go for why one would be a control that does
+		// nothing.
+		{
+			Type:         sdk.JsonSchemaTypeBoolean,
+			Key:          notifyPersonKey,
+			Title:        "Notify: Person",
+			Description:  "Send a notification when a person is detected. Turning this off does not stop recording or detection — the event is still saved, still on the timeline, and still described.",
+			DefaultValue: true,
+			Group:        detectionsGroup,
+			Store:        &storeTrue,
+		},
+		{
+			Type:         sdk.JsonSchemaTypeBoolean,
+			Key:          notifyVehicleKey,
+			Title:        "Notify: Vehicle",
+			Description:  "Send a notification when a vehicle is detected. Often the first one to turn off for a camera facing a road or shared driveway.",
+			DefaultValue: true,
+			Group:        detectionsGroup,
+			Store:        &storeTrue,
+		},
+		{
+			Type:         sdk.JsonSchemaTypeBoolean,
+			Key:          notifyAnimalKey,
+			Title:        "Notify: Animal",
+			Description:  "Send a notification when an animal is detected — pets, wildlife, next door's cat.",
+			DefaultValue: true,
+			Group:        detectionsGroup,
+			Store:        &storeTrue,
+		},
+		{
+			Type:         sdk.JsonSchemaTypeBoolean,
+			Key:          notifyPackageKey,
+			Title:        "Notify: Package",
+			Description:  "Send a notification when a package is detected.",
+			DefaultValue: true,
+			Group:        detectionsGroup,
+			Store:        &storeTrue,
+		},
+		{
+			Type:         sdk.JsonSchemaTypeBoolean,
+			Key:          notifyOtherKey,
+			Title:        "Notify: Other detections",
+			Description:  "Send a notification for detection types outside the standard set — labels produced by a classifier plugin, such as a specific bird or a weather condition. Without this they would be the one kind of detection you could not filter.",
+			DefaultValue: true,
+			Group:        detectionsGroup,
+			Store:        &storeTrue,
 		},
 		{
 			Type:         sdk.JsonSchemaTypeBoolean,
@@ -1276,6 +1343,12 @@ func (p *NVRPlugin) attachDetectionIngestion(cam *sdk.CameraDevice) {
 	if p.describer != nil {
 		describer = p.describer
 	}
-	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, p.Logger)
+	// The notification filter reads the per-detection-type toggles from this
+	// plugin's own storage on every event (see notify_filter.go), so it is
+	// constructed here rather than held on NVRPlugin: it owns no state worth
+	// sharing, and p.store is available whether or not the database opened.
+	// Nothing suppresses notifications until a user turns a type off, since
+	// every toggle defaults to true.
+	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, newNotifyLabelFilter(p.store), p.Logger)
 	p.detectionSubs.add(cam.ID(), cam.OnDetectionEvent(ingester.handle))
 }

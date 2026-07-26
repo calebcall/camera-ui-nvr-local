@@ -10,6 +10,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.5.0] - 2026-07-26
+
+### Added
+
+- **Per-detection-type notification toggles.** A new **Detections** tab on Settings → Recordings
+  controls which detection types are worth a notification: Person, Vehicle, Animal, Package, and a
+  catch-all for classifier-produced labels outside the standard set. Every toggle **defaults to on**,
+  so upgrading changes nothing until something is turned off — a user who never opens the tab keeps
+  receiving exactly the notifications they received before it existed.
+
+  This closes a real gap rather than adding a preference. Notifications were previously
+  all-or-nothing: camera.ui's own notification settings offer a master switch, a per-plugin source
+  switch, per-system-type switches, and quiet hours, but nothing about detection labels — so someone
+  who wanted "tell me about people, not passing cars" had no option short of silencing this plugin
+  entirely.
+
+  An event notifies when **any** of its labels is enabled, not all of them. A person arriving in a
+  vehicle is a single event carrying both labels, and turning Vehicle off is a request to stop being
+  pinged about passing traffic, not to stop hearing that somebody showed up.
+
+  The filter is applied **before** the once-per-event notification latch, so a suppressed event does
+  not consume its own notification slot — re-enabling a type mid-event still works, which it would not
+  if the order were reversed.
+
+  Scope is deliberately narrow. There is **no Motion or Audio toggle**, because motion-only and
+  audio-only events already never notify, making such a switch a control that does nothing. The
+  toggles affect **notifications only** — recording, retention, timeline markers, thumbnails, and AI
+  descriptions are untouched, since a detection you don't want to be pinged about is still footage you
+  want to review. And they are **plugin-wide**, because the plugin API exposes no per-camera settings
+  hook; camera.ui automations already do per-camera label filtering properly, and the README points
+  there for anyone who needs it.
+
+### Changed
+
+- **The settings tab strip is now Storage / Detections / GenAI.** The new Detections tab is also where
+  face-recognition settings belong when those are built, rather than in a tab of their own — faces are
+  a detection concern, and splitting detection settings across two tabs would leave neither complete.
+
 ## [5.4.0] - 2026-07-26
 
 ### Added
@@ -173,6 +211,7 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
+[5.5.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.5.0
 [5.4.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.4.0
 [5.3.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.3.0
 [5.2.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.2.0

@@ -295,7 +295,7 @@ func newAIDescriptionRig(t *testing.T, reply sdk.EventDescription, settings map[
 		// Only the store and the describer are wired: recorders, thumbs,
 		// coverage, and the notifier are the other tasks' concerns and each has
 		// its own integration test. nil is their documented "not wired" state.
-		ingester: newDetectionEventIngester(events, nil, nil, nil, nil, nil, describer, nil),
+		ingester: newDetectionEventIngester(events, nil, nil, nil, nil, nil, describer, nil, nil),
 	}
 }
 

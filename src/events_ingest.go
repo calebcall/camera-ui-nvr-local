@@ -112,6 +112,18 @@ type eventDescriber interface {
 	DescribeAsync(event store.DetectionEvent)
 }
 
+// notificationFilter is the minimal interface notify needs to honor the
+// per-detection-type notification toggles: *notifyLabelFilter satisfies it
+// directly (see notify_filter.go, which also documents why the filter is
+// plugin-wide rather than per-camera).
+//
+// nil allows every notification, the same optional-dependency convention thumbs,
+// coverage, notifier, and describer already follow — so a plugin instance or test
+// that never wires one behaves exactly as it did before this existed.
+type notificationFilter interface {
+	NotifyAllowed(event store.DetectionEvent) bool
+}
+
 // detectionEventIngester adapts sdk.CameraDevice.OnDetectionEvent's callback
 // shape into an EventStore.Upsert call, plus (Task 8) a MarkEvent call on
 // the event's camera's recorder, if one is registered. One instance is
@@ -146,6 +158,13 @@ type detectionEventIngester struct {
 	// takes effect without a plugin restart.
 	describer eventDescriber
 
+	// notifyFilter suppresses notifications for detection types the user has
+	// turned off (see notificationFilter and notify_filter.go). nil allows
+	// every notification. Like the AI-descriptions toggle, the individual
+	// per-type switches are read on every event rather than cached, so
+	// changing one takes effect without a plugin restart.
+	notifyFilter notificationFilter
+
 	// notified dedups notify's Publish call to exactly once per event ID —
 	// see notifiedEvents' own doc comment for why this can't simply reuse
 	// acc's per-event accumulator (that entry is evicted on the very same
@@ -176,12 +195,13 @@ type detectionEventIngester struct {
 // HasRecording value, whatever the producer sent, is upserted unchanged) —
 // so existing callers/tests that don't care about that wiring don't need to
 // supply one. describer may also be nil, which skips AI description
-// generation entirely (see eventDescriber). Errors are only logged, never
+// generation entirely (see eventDescriber), and notifyFilter may be nil, which
+// allows every notification (see notificationFilter). Errors are only logged, never
 // surfaced, because OnDetectionEvent's callback signature (see
 // camera_device.go) has no error return for a failed handler to report
 // through.
-func newDetectionEventIngester(store eventUpserter, recorders eventRecorderLookup, thumbs eventThumbnailer, coverage recordingCoverageChecker, notifier eventNotifier, cameraNames cameraNamer, describer eventDescriber, logger *sdk.Logger) *detectionEventIngester {
-	return &detectionEventIngester{store: store, recorders: recorders, thumbs: thumbs, coverage: coverage, notifier: notifier, cameraNames: cameraNames, describer: describer, logger: logger, acc: &detectionAccumulator{}}
+func newDetectionEventIngester(store eventUpserter, recorders eventRecorderLookup, thumbs eventThumbnailer, coverage recordingCoverageChecker, notifier eventNotifier, cameraNames cameraNamer, describer eventDescriber, notifyFilter notificationFilter, logger *sdk.Logger) *detectionEventIngester {
+	return &detectionEventIngester{store: store, recorders: recorders, thumbs: thumbs, coverage: coverage, notifier: notifier, cameraNames: cameraNames, describer: describer, notifyFilter: notifyFilter, logger: logger, acc: &detectionAccumulator{}}
 }
 
 // handle is the exact callback shape sdk.CameraDevice.OnDetectionEvent
@@ -372,6 +392,13 @@ func (i *detectionEventIngester) notify(event sdk.DetectionEvent) {
 		return
 	}
 	if !store.EventHasDetections(event) {
+		return
+	}
+	// Checked BEFORE markFirst on purpose. markFirst is a one-shot latch, so
+	// filtering after it would let a suppressed event consume its own
+	// notification slot — and then a user re-enabling that detection type
+	// mid-event would still get nothing, for reasons invisible from the UI.
+	if i.notifyFilter != nil && !i.notifyFilter.NotifyAllowed(event) {
 		return
 	}
 	if !i.notified.markFirst(event.ID) {
