@@ -184,65 +184,6 @@ func TestStorageSchema_GroupOrder_PutsStorageFirst(t *testing.T) {
 	}
 }
 
-// TestStorageSchema_NotificationToggles_AllDefaultToOn is the upgrade-safety
-// test for the Detections tab. Every toggle defaulting to true is what makes
-// this feature invisible until someone opts into using it: a user who never
-// opens the tab keeps receiving exactly the notifications they received before
-// it existed.
-//
-// A single toggle shipped defaulting to false would silently stop a class of
-// notification on upgrade, which is the kind of regression nobody reports as a
-// bug — they just quietly stop being told about people at their door.
-func TestStorageSchema_NotificationToggles_AllDefaultToOn(t *testing.T) {
-	p := &NVRPlugin{}
-	schemas := p.StorageSchema()
-
-	for _, key := range []string{
-		notifyPersonKey, notifyVehicleKey, notifyAnimalKey, notifyPackageKey, notifyOtherKey,
-	} {
-		t.Run(key, func(t *testing.T) {
-			s := schemaByKey(t, schemas, key)
-
-			if s.Type != sdk.JsonSchemaTypeBoolean {
-				t.Errorf("Type = %q, want %q", s.Type, sdk.JsonSchemaTypeBoolean)
-			}
-			if s.DefaultValue != true {
-				t.Errorf("DefaultValue = %v, want true (upgrading must not silence anything)", s.DefaultValue)
-			}
-			if s.Group != detectionsGroup {
-				t.Errorf("Group = %q, want %q", s.Group, detectionsGroup)
-			}
-			if s.Store == nil || !*s.Store {
-				t.Error("Store must be true so the setting survives a restart")
-			}
-			if len(s.Condition) != 0 {
-				t.Errorf("Condition = %+v, want none; these are not gated behind anything", s.Condition)
-			}
-
-		})
-	}
-}
-
-// TestStorageSchema_NotificationToggles_CoverEveryFilterableLabel keeps the form
-// and the filter in agreement. notifyObjectLabelKeys is what notify_filter.go
-// actually consults, so a label added there without a matching schema field
-// would become permanently unfilterable — the toggle would simply not exist,
-// while the filter kept looking for a value that could only ever be its default.
-func TestStorageSchema_NotificationToggles_CoverEveryFilterableLabel(t *testing.T) {
-	p := &NVRPlugin{}
-	schemas := p.StorageSchema()
-
-	for label, key := range notifyObjectLabelKeys {
-		if got := schemaByKey(t, schemas, key).Key; got != key {
-			t.Errorf("label %q maps to key %q, which has no schema field", label, key)
-		}
-	}
-
-	// The catch-all is not in that map (it is the fallback for anything absent
-	// from it), so it is checked separately rather than being quietly omitted.
-	schemaByKey(t, schemas, notifyOtherKey)
-}
-
 // TestStorageSchema_NoMotionOrAudioNotifyToggle pins a deliberate omission so a
 // later well-meaning edit does not "complete the set".
 //
@@ -453,5 +394,95 @@ func TestCameraNotifySchema_IsTerse(t *testing.T) {
 		if s.Title == "" {
 			t.Errorf("%s has no Title", s.Key)
 		}
+	}
+}
+
+// TestStorageSchema_NotifyTypes_IsOneMultiSelectDefaultingToEverything replaces
+// the five per-type booleans this used to assert. The frontend draws each
+// boolean as its own bordered row, so five of them filled the Detections tab
+// with empty space; an enum with Multiple renders as a single control.
+//
+// DefaultValue must be every option: a fresh install has to notify exactly as it
+// did before this setting existed, and a default of "none" would silently
+// silence everything on upgrade.
+func TestStorageSchema_NotifyTypes_IsOneMultiSelectDefaultingToEverything(t *testing.T) {
+	p := &NVRPlugin{}
+	s := schemaByKey(t, p.StorageSchema(), notifyTypesKey)
+
+	if s.Type != sdk.JsonSchemaTypeString {
+		t.Errorf("Type = %q, want %q (an enum field is a string type)", s.Type, sdk.JsonSchemaTypeString)
+	}
+	if !s.Multiple {
+		t.Error("Multiple must be true, or the frontend renders a single-select")
+	}
+	if !slices.Equal(s.Enum, notifyTypeOptions) {
+		t.Errorf("Enum = %v, want %v", s.Enum, notifyTypeOptions)
+	}
+
+	def, ok := s.DefaultValue.([]string)
+	if !ok {
+		t.Fatalf("DefaultValue = %#v, want []string", s.DefaultValue)
+	}
+	if !slices.Equal(def, notifyTypeOptions) {
+		t.Errorf("DefaultValue = %v, want every option %v", def, notifyTypeOptions)
+	}
+	if s.Group != detectionsGroup {
+		t.Errorf("Group = %q, want %q", s.Group, detectionsGroup)
+	}
+	if len(s.Condition) != 0 {
+		t.Errorf("Condition = %+v, want none", s.Condition)
+	}
+}
+
+// TestStorageSchema_DetectionsTab_IsASingleControl is the anti-regression guard
+// for the layout complaint that prompted this: the tab must not drift back to a
+// field per detection type.
+func TestStorageSchema_DetectionsTab_IsASingleControl(t *testing.T) {
+	p := &NVRPlugin{}
+
+	var keys []string
+	for _, s := range p.StorageSchema() {
+		if s.Group == detectionsGroup && !s.Hidden {
+			keys = append(keys, s.Key)
+		}
+	}
+
+	if !slices.Equal(keys, []string{notifyTypesKey}) {
+		t.Errorf("Detections tab fields = %v, want exactly [%s]", keys, notifyTypesKey)
+	}
+}
+
+// TestStorageSchema_LegacyNotifyKeys_AreNotDeclared keeps the pre-5.7 boolean
+// keys read-only. Declaring one would put a stray toggle back on the form and
+// let the frontend write to a key that only exists as a migration fallback.
+func TestStorageSchema_LegacyNotifyKeys_AreNotDeclared(t *testing.T) {
+	legacy := map[string]bool{
+		notifyPersonKey: true, notifyVehicleKey: true, notifyAnimalKey: true,
+		notifyPackageKey: true, notifyOtherKey: true,
+	}
+
+	p := &NVRPlugin{}
+	for _, s := range p.StorageSchema() {
+		if legacy[s.Key] {
+			t.Errorf("legacy key %q must not be declared; it is read-only for migration", s.Key)
+		}
+	}
+	for _, s := range cameraNotifySchema() {
+		if legacy[s.Key] {
+			t.Errorf("legacy key %q must not be declared on the per-camera schema", s.Key)
+		}
+	}
+}
+
+// TestCameraNotifySchema_IsOverridePlusOneControl mirrors the global guard for
+// the per-camera panel: an override toggle and one multi-select, nothing more.
+func TestCameraNotifySchema_IsOverridePlusOneControl(t *testing.T) {
+	var keys []string
+	for _, s := range cameraNotifySchema() {
+		keys = append(keys, s.Key)
+	}
+
+	if !slices.Equal(keys, []string{notifyOverrideKey, notifyTypesKey}) {
+		t.Errorf("per-camera fields = %v, want [%s %s]", keys, notifyOverrideKey, notifyTypesKey)
 	}
 }

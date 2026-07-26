@@ -533,57 +533,31 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Group: storageGroup,
 			Store: &storeTrue,
 		},
-		// Detections tab: which detection types are worth a notification. All
-		// default to ON so that upgrading changes nothing — a user who never
-		// opens this tab keeps getting exactly the notifications they got
-		// before it existed.
+		// Detections tab: which detection types are worth a notification.
 		//
-		// These affect NOTIFICATIONS ONLY. Recording, retention, timeline
-		// markers, thumbnails, and AI descriptions are unaffected: a detection
-		// you don't want to be pinged about is still footage you'll want to
-		// review. Each Description says so, because "Animal: off" could
-		// otherwise reasonably be read as "stop recording animals".
+		// One multi-select rather than a toggle per type: the frontend renders
+		// each boolean as its own bordered row (CuiSchemaField.vue), so five of
+		// them filled the tab with mostly empty space, while an enum with
+		// Multiple renders as a single control showing the selection as chips.
 		//
-		// There is deliberately no Motion or Audio toggle — see the storage-key
-		// block in notify_filter.go for why one would be a control that does
-		// nothing.
+		// Defaults to every type, so a fresh install notifies exactly as it did
+		// before this setting existed. An EMPTY selection is meaningful — notify
+		// for nothing — and is preserved rather than being treated as unset; see
+		// enabledNotifyTypes.
+		//
+		// Notifications only. Recording, retention, timeline markers, thumbnails
+		// and AI descriptions ignore this entirely: a detection you don't want to
+		// be pinged about is still footage you'll want to review.
+		//
+		// There is deliberately no motion or audio option — see the storage-key
+		// block in notify_filter.go for why either would be a dead control.
 		{
-			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          notifyPersonKey,
-			Title:        "Person",
-			DefaultValue: true,
-			Group:        detectionsGroup,
-			Store:        &storeTrue,
-		},
-		{
-			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          notifyVehicleKey,
-			Title:        "Vehicle",
-			DefaultValue: true,
-			Group:        detectionsGroup,
-			Store:        &storeTrue,
-		},
-		{
-			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          notifyAnimalKey,
-			Title:        "Animal",
-			DefaultValue: true,
-			Group:        detectionsGroup,
-			Store:        &storeTrue,
-		},
-		{
-			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          notifyPackageKey,
-			Title:        "Package",
-			DefaultValue: true,
-			Group:        detectionsGroup,
-			Store:        &storeTrue,
-		},
-		{
-			Type:         sdk.JsonSchemaTypeBoolean,
-			Key:          notifyOtherKey,
-			Title:        "Other",
-			DefaultValue: true,
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          notifyTypesKey,
+			Title:        "Notify for",
+			Enum:         notifyTypeOptions,
+			Multiple:     true,
+			DefaultValue: notifyTypeOptions,
 			Group:        detectionsGroup,
 			Store:        &storeTrue,
 		},

@@ -387,10 +387,7 @@ func TestCameraNotifyRegistry_AddDeclaresSchemaAndResolves(t *testing.T) {
 
 	r.add("cam-1", storage)
 
-	for _, key := range []string{
-		notifyOverrideKey, notifyPersonKey, notifyVehicleKey,
-		notifyAnimalKey, notifyPackageKey, notifyOtherKey,
-	} {
+	for _, key := range []string{notifyOverrideKey, notifyTypesKey} {
 		if !storage.HasSchema(key) {
 			t.Errorf("schema %q was not declared on the camera's storage", key)
 		}
@@ -468,3 +465,119 @@ func (f *fakeCameraSettings) AddSchema(schema *sdk.JsonSchema) error {
 }
 
 var errDuplicateSchema = errors.New("schema already exists")
+
+// TestNotifyLabelFilter_NotifyTypes_GovernsWhichLabelsNotify covers the new
+// list-shaped setting directly.
+func TestNotifyLabelFilter_NotifyTypes_GovernsWhichLabelsNotify(t *testing.T) {
+	f := newNotifyLabelFilter(notifyStore{notifyTypesKey: []string{"person", "package"}}, nil)
+
+	for _, tc := range []struct {
+		label string
+		want  bool
+	}{
+		{"person", true},
+		{"package", true},
+		{"vehicle", false},
+		{"animal", false},
+		{"bird", false}, // "other" not selected
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			if got := f.NotifyAllowed(labelEvent(tc.label)); got != tc.want {
+				t.Errorf("NotifyAllowed(%q) = %v, want %v", tc.label, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNotifyLabelFilter_EmptyNotifyTypes_SuppressesEverything is the case a
+// plain default value cannot express, and the reason enabledNotifyTypes uses a
+// nil sentinel rather than a default: an empty selection is a deliberate choice
+// made in the UI, and treating it as "unset" would silently re-enable
+// everything the user just turned off.
+func TestNotifyLabelFilter_EmptyNotifyTypes_SuppressesEverything(t *testing.T) {
+	f := newNotifyLabelFilter(notifyStore{notifyTypesKey: []string{}}, nil)
+
+	for _, label := range []string{"person", "vehicle", "animal", "package", "bird"} {
+		if f.NotifyAllowed(labelEvent(label)) {
+			t.Errorf("%q notified with an explicitly empty selection", label)
+		}
+	}
+}
+
+// TestNotifyLabelFilter_NotifyTypes_AcceptsMsgpackShapes covers the list coming
+// back as []any rather than []string, which is what a round trip through
+// storage produces.
+func TestNotifyLabelFilter_NotifyTypes_AcceptsMsgpackShapes(t *testing.T) {
+	f := newNotifyLabelFilter(notifyStore{notifyTypesKey: []any{"person", " VEHICLE ", 42}}, nil)
+
+	if !f.NotifyAllowed(labelEvent("person")) {
+		t.Error("person was suppressed with a []any selection")
+	}
+	if !f.NotifyAllowed(labelEvent("vehicle")) {
+		t.Error("vehicle was suppressed; entries must be trimmed and lowercased")
+	}
+	if f.NotifyAllowed(labelEvent("animal")) {
+		t.Error("animal notified though it was not selected")
+	}
+}
+
+// TestNotifyLabelFilter_LegacyBooleans_StillHonored is the 5.5.0/5.6.0 upgrade
+// path. Those five keys may already be configured, and losing them on upgrade
+// would silently restore notifications the user had turned off.
+func TestNotifyLabelFilter_LegacyBooleans_StillHonored(t *testing.T) {
+	// No notifyTypes key at all — only the legacy booleans.
+	f := newNotifyLabelFilter(notifyStore{notifyVehicleKey: false, notifyOtherKey: false}, nil)
+
+	if f.NotifyAllowed(labelEvent("vehicle")) {
+		t.Error("legacy notifyVehicle=false was ignored")
+	}
+	if f.NotifyAllowed(labelEvent("bird")) {
+		t.Error("legacy notifyOther=false was ignored")
+	}
+	if !f.NotifyAllowed(labelEvent("person")) {
+		t.Error("person was suppressed; unset legacy keys default to true")
+	}
+}
+
+// TestNotifyLabelFilter_NotifyTypes_WinsOverLegacyBooleans pins the precedence.
+// Once the new key exists it is authoritative, including when it contradicts a
+// stale legacy boolean left behind on disk.
+func TestNotifyLabelFilter_NotifyTypes_WinsOverLegacyBooleans(t *testing.T) {
+	f := newNotifyLabelFilter(notifyStore{
+		notifyTypesKey:   []string{"vehicle"},
+		notifyVehicleKey: false, // stale, must be ignored
+		notifyPersonKey:  true,  // stale, must be ignored
+	}, nil)
+
+	if !f.NotifyAllowed(labelEvent("vehicle")) {
+		t.Error("notifyTypes did not win over a stale legacy notifyVehicle=false")
+	}
+	if f.NotifyAllowed(labelEvent("person")) {
+		t.Error("a stale legacy notifyPerson=true re-enabled a type not in notifyTypes")
+	}
+}
+
+// TestNotifyLabelFilter_PerCameraNotifyTypes_Overrides checks the list-shaped
+// setting works through the per-camera override too, in both directions.
+func TestNotifyLabelFilter_PerCameraNotifyTypes_Overrides(t *testing.T) {
+	f := newNotifyLabelFilter(
+		notifyStore{notifyTypesKey: []string{"person"}},
+		fakeCameraNotifySettings{
+			"cam-1": notifyStore{notifyOverrideKey: true, notifyTypesKey: []string{"vehicle"}},
+			"cam-2": notifyStore{notifyOverrideKey: false, notifyTypesKey: []string{"vehicle"}},
+		},
+	)
+
+	if !f.NotifyAllowed(camEvent("cam-1", "vehicle")) {
+		t.Error("cam-1 override did not enable vehicle")
+	}
+	if f.NotifyAllowed(camEvent("cam-1", "person")) {
+		t.Error("cam-1 override did not exclude person")
+	}
+	if !f.NotifyAllowed(camEvent("cam-2", "person")) {
+		t.Error("cam-2 should follow global (person) while its override is off")
+	}
+	if f.NotifyAllowed(camEvent("cam-2", "vehicle")) {
+		t.Error("cam-2 used its own list while its override was off")
+	}
+}
