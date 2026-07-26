@@ -89,6 +89,29 @@ type cameraNamer interface {
 	CameraName(cameraID string) (string, bool)
 }
 
+// eventDescriber is the minimal interface detectionEventIngester needs to
+// hand a finished event off for AI description generation (Feature: AI
+// Descriptions — a narrative title/description/summary/threat level produced
+// by a user-configured OpenAI-compatible vision endpoint and persisted onto
+// the event row): *describe.Describer satisfies it directly.
+//
+// DescribeAsync is fire-and-forget and does ALL of its own gating — terminal
+// message only, object-detections only, the feature enabled and configured,
+// the label allow-list, the minimum-confidence floor, and per-event dedup
+// (see its doc comment in src/describe/describer.go) — so describe below
+// calls it unconditionally on every lifecycle message and lets it decide,
+// exactly as generateThumbnail delegates that judgement to media.Generator
+// rather than duplicating a second copy of the same rules here that could
+// drift out of step with the first.
+//
+// nil (tests, or a plugin instance where the store never opened, so there is
+// nowhere to persist a description to) skips description entirely — the same
+// optional-dependency convention thumbs, coverage, and notifier already
+// established.
+type eventDescriber interface {
+	DescribeAsync(event store.DetectionEvent)
+}
+
 // detectionEventIngester adapts sdk.CameraDevice.OnDetectionEvent's callback
 // shape into an EventStore.Upsert call, plus (Task 8) a MarkEvent call on
 // the event's camera's recorder, if one is registered. One instance is
@@ -114,6 +137,14 @@ type detectionEventIngester struct {
 	// notification title (see notify). nil falls back to the bare camera
 	// ID rather than failing to notify.
 	cameraNames cameraNamer
+
+	// describer generates and persists an AI description for a terminal
+	// object-detection event, asynchronously (see eventDescriber and
+	// describe below). nil disables the feature's wiring altogether; note
+	// that the user-facing on/off setting (aiDescriptionsEnabled) is
+	// checked inside DescribeAsync on every event, NOT here, so toggling it
+	// takes effect without a plugin restart.
+	describer eventDescriber
 
 	// notified dedups notify's Publish call to exactly once per event ID —
 	// see notifiedEvents' own doc comment for why this can't simply reuse
@@ -144,11 +175,13 @@ type detectionEventIngester struct {
 // nil coverage skips the has_recording recompute (the event's own
 // HasRecording value, whatever the producer sent, is upserted unchanged) —
 // so existing callers/tests that don't care about that wiring don't need to
-// supply one. Errors are only logged, never surfaced, because
-// OnDetectionEvent's callback signature (see camera_device.go) has no error
-// return for a failed handler to report through.
-func newDetectionEventIngester(store eventUpserter, recorders eventRecorderLookup, thumbs eventThumbnailer, coverage recordingCoverageChecker, notifier eventNotifier, cameraNames cameraNamer, logger *sdk.Logger) *detectionEventIngester {
-	return &detectionEventIngester{store: store, recorders: recorders, thumbs: thumbs, coverage: coverage, notifier: notifier, cameraNames: cameraNames, logger: logger, acc: &detectionAccumulator{}}
+// supply one. describer may also be nil, which skips AI description
+// generation entirely (see eventDescriber). Errors are only logged, never
+// surfaced, because OnDetectionEvent's callback signature (see
+// camera_device.go) has no error return for a failed handler to report
+// through.
+func newDetectionEventIngester(store eventUpserter, recorders eventRecorderLookup, thumbs eventThumbnailer, coverage recordingCoverageChecker, notifier eventNotifier, cameraNames cameraNamer, describer eventDescriber, logger *sdk.Logger) *detectionEventIngester {
+	return &detectionEventIngester{store: store, recorders: recorders, thumbs: thumbs, coverage: coverage, notifier: notifier, cameraNames: cameraNames, describer: describer, logger: logger, acc: &detectionAccumulator{}}
 }
 
 // handle is the exact callback shape sdk.CameraDevice.OnDetectionEvent
@@ -208,6 +241,7 @@ func (i *detectionEventIngester) handle(eventType sdk.DetectionEventType, event 
 	i.markEvent(merged)
 	i.generateThumbnail(merged)
 	i.notify(merged)
+	i.describe(merged)
 }
 
 // resolveHasRecording recomputes event.HasRecording from the recorded
@@ -369,6 +403,35 @@ func (i *detectionEventIngester) notify(event sdk.DetectionEvent) {
 	if err := i.notifier.Publish(n); err != nil && i.logger != nil {
 		i.logger.Error("nvr-local: publish notification failed:", err)
 	}
+}
+
+// describe hands event off for asynchronous AI description generation, if a
+// describer was supplied — a no-op when i.describer is nil (see
+// eventDescriber).
+//
+// Called on every lifecycle message, like generateThumbnail, because
+// eventDescriber owns the decision about which messages are worth acting on
+// (only the terminal one, and only for events with detections that pass the
+// user's configured filters); see eventDescriber's doc comment for why that
+// judgement deliberately isn't duplicated here.
+//
+// The event passed is `merged` — handle's accumulated union, not the raw
+// wire message — which is load-bearing rather than incidental: a terminal
+// 'end' message routinely arrives sparse (Segments:[], no Types), and a
+// describer handed that would be gated out by its own has-detections check
+// and never describe an event whose earlier messages carried real
+// detections.
+//
+// Deliberately LAST in handle: it is the only step that can cost the user
+// money, and everything the rest of the plugin needs from this event —
+// the upserted row, the recorder's protected window, the thumbnail, the
+// notification — is already done by the time it runs, so a description is
+// never on the critical path of anything that matters.
+func (i *detectionEventIngester) describe(event store.DetectionEvent) {
+	if i.describer == nil {
+		return
+	}
+	i.describer.DescribeAsync(event)
 }
 
 // detectionSummary builds the human-facing notification Body from an event's

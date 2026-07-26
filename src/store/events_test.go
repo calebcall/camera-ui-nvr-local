@@ -8,7 +8,7 @@ import (
 
 // newTestEvent builds a minimal-but-valid DetectionEvent for test fixtures:
 // id/cameraID/startMs are the axes the pagination/filter tests vary, score
-// is folded into a single trigger so bestConfidence/MinConfidence filtering
+// is folded into a single trigger so BestConfidence/MinConfidence filtering
 // has something to compare against, and eventType lets state-filter tests
 // exercise both "active" and "ended".
 func newTestEvent(id, cameraID string, startMs int64, score float64, state string, types ...string) DetectionEvent {
@@ -27,12 +27,24 @@ func newTestEvent(id, cameraID string, startMs int64, score float64, state strin
 
 func openTestEventStore(t *testing.T) *EventStore {
 	t.Helper()
+	events, _ := openTestEventStoreWithDB(t)
+	return events
+}
+
+// openTestEventStoreWithDB is openTestEventStore for the tests that also need
+// the *DB itself — either to reach a column no store method exposes (the
+// malformed-description test corrupts events.description directly) or to drive
+// two stores off the same connection. Returning the *DB separately, rather
+// than adding an accessor to EventStore, keeps the production API free of a
+// method that exists only for tests.
+func openTestEventStoreWithDB(t *testing.T) (*EventStore, *DB) {
+	t.Helper()
 	db, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return NewEventStore(db)
+	return NewEventStore(db), db
 }
 
 // TestEventStore_Query_HasDetectionsIsTypeBased locks in the fix for the
@@ -467,5 +479,165 @@ func TestEventStore_DeleteOlderThan(t *testing.T) {
 	}
 	if len(remainingCam2.Events) != 1 || remainingCam2.Events[0].ID != "other-old" {
 		t.Fatalf("expected other camera's equally-old event to be untouched, got %+v", remainingCam2.Events)
+	}
+}
+
+// describableEvent builds an ended, single-segment event — the only shape the
+// AI-description path ever produces a description for (a terminal event that
+// actually carried a detection), so every description test starts from it.
+func describableEvent(id, cameraID string) DetectionEvent {
+	return DetectionEvent{
+		ID:        id,
+		CameraID:  cameraID,
+		StartTime: 1000,
+		EndTime:   2000,
+		State:     sdk.DetectionEventStateEnded,
+		Types:     []string{"person"},
+		Segments: []sdk.EventSegment{{
+			FirstSeen:  1000,
+			LastSeen:   2000,
+			Detections: []sdk.EventDetection{{Label: "person", Score: 0.9}},
+		}},
+	}
+}
+
+// TestEventStore_SetDescription_RoundTripsOntoFirstSegment is the core proof
+// for the AI-description store layer: a description written through
+// SetDescription comes back out of Query hung on Segments[0].Description,
+// which is exactly where every camera.ui frontend surface looks for it
+// (`segments.find(s => s.description)`).
+func TestEventStore_SetDescription_RoundTripsOntoFirstSegment(t *testing.T) {
+	events := openTestEventStore(t)
+
+	if err := events.Upsert([]DetectionEvent{describableEvent("ev-1", "cam-1")}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	want := sdk.EventDescription{
+		Title:       "Person at door",
+		Description: "A person walks up to the door and waits.",
+		Summary:     "Someone approached the door.",
+		ThreatLevel: 1,
+	}
+	if err := events.SetDescription("ev-1", want); err != nil {
+		t.Fatalf("SetDescription: %v", err)
+	}
+
+	got, err := events.Query([]string{"cam-1"}, GetEventsOptions{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got.Events) != 1 {
+		t.Fatalf("got %d events, want 1", len(got.Events))
+	}
+	desc := got.Events[0].Segments[0].Description
+	if desc == nil {
+		t.Fatal("Segments[0].Description is nil, want the stored description")
+	}
+	if *desc != want {
+		t.Errorf("description = %+v, want %+v", *desc, want)
+	}
+}
+
+// TestEventStore_Upsert_PreservesDescription is the reason the description
+// lives in its own column rather than inside the raw JSON blob: Upsert
+// rewrites raw wholesale on every lifecycle message, so a duplicate or late
+// terminal message arriving after generation finished would silently erase a
+// description stored there. A dedicated column cannot be clobbered by Upsert
+// at all — the same guarantee Upsert already documents for thumb_ref.
+func TestEventStore_Upsert_PreservesDescription(t *testing.T) {
+	events := openTestEventStore(t)
+
+	ev := describableEvent("ev-1", "cam-1")
+	if err := events.Upsert([]DetectionEvent{ev}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	want := sdk.EventDescription{Title: "Person at door", Description: "Narrative."}
+	if err := events.SetDescription("ev-1", want); err != nil {
+		t.Fatalf("SetDescription: %v", err)
+	}
+
+	if err := events.Upsert([]DetectionEvent{ev}); err != nil {
+		t.Fatalf("re-Upsert: %v", err)
+	}
+
+	got, err := events.Query([]string{"cam-1"}, GetEventsOptions{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if d := got.Events[0].Segments[0].Description; d == nil || d.Title != "Person at door" {
+		t.Errorf("description = %+v after re-upsert, want it preserved", d)
+	}
+}
+
+// TestEventStore_Query_DropsDescriptionWhenEventHasNoSegments proves an event
+// with no segments — nowhere to hang a description — still queries cleanly
+// rather than panicking on Segments[0]. Unreachable in practice (only events
+// carrying detections are ever described, and those carry segments), but the
+// decode loop runs over every row in the table, including ones written before
+// this feature existed or by another code path entirely.
+func TestEventStore_Query_DropsDescriptionWhenEventHasNoSegments(t *testing.T) {
+	events := openTestEventStore(t)
+
+	ev := describableEvent("ev-1", "cam-1")
+	ev.Segments = nil
+	if err := events.Upsert([]DetectionEvent{ev}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := events.SetDescription("ev-1", sdk.EventDescription{Title: "T", Description: "D"}); err != nil {
+		t.Fatalf("SetDescription: %v", err)
+	}
+
+	got, err := events.Query([]string{"cam-1"}, GetEventsOptions{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got.Events) != 1 {
+		t.Fatalf("got %d events, want 1", len(got.Events))
+	}
+	if len(got.Events[0].Segments) != 0 {
+		t.Errorf("segments = %d, want 0 (nowhere to hang a description)", len(got.Events[0].Segments))
+	}
+}
+
+// TestEventStore_Query_SkipsMalformedDescriptionColumn proves a description
+// that can't be decoded (hand-edited, or written by a future version with an
+// incompatible shape) degrades to "no description" instead of failing a query
+// that would otherwise have succeeded — the event list must never go blank
+// because one row's optional extra is unreadable.
+func TestEventStore_Query_SkipsMalformedDescriptionColumn(t *testing.T) {
+	events, db := openTestEventStoreWithDB(t)
+
+	if err := events.Upsert([]DetectionEvent{describableEvent("ev-1", "cam-1")}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	db.Lock()
+	err := db.Conn().Exec(`UPDATE events SET description = 'not json' WHERE id = 'ev-1'`)
+	db.Unlock()
+	if err != nil {
+		t.Fatalf("corrupt description: %v", err)
+	}
+
+	got, qerr := events.Query([]string{"cam-1"}, GetEventsOptions{})
+	if qerr != nil {
+		t.Fatalf("Query must not fail on a malformed description: %v", qerr)
+	}
+	if len(got.Events) != 1 {
+		t.Fatalf("got %d events, want 1", len(got.Events))
+	}
+	if got.Events[0].Segments[0].Description != nil {
+		t.Error("Description should be nil when the column is malformed")
+	}
+}
+
+// TestEventStore_SetDescription_OnMissingEventIsNotAnError mirrors
+// SetThumbRef's contract: retention can delete an event between generation
+// starting and finishing, and that race is normal operation, not a failure
+// worth logging as one.
+func TestEventStore_SetDescription_OnMissingEventIsNotAnError(t *testing.T) {
+	events := openTestEventStore(t)
+	if err := events.SetDescription("nope", sdk.EventDescription{Title: "T"}); err != nil {
+		t.Errorf("SetDescription on a deleted/absent event = %v, want nil", err)
 	}
 }

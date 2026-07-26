@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.3.0] - 2026-07-26
+
+### Added
+
+- **AI event descriptions (optional, off by default).** Each finished object-detection event can now
+  be described by a vision model: frames are sampled across the event's own recording and sent in one
+  request to any OpenAI-compatible `/chat/completions` endpoint, and the returned title, narrative,
+  summary, and threat level are stored on the event. The camera.ui frontend already reads
+  `segments[].description`, so it renders these on event cards, in the recordings list, and over the
+  player with **no frontend changes at all**. Configured in a new "AI Descriptions" group on Settings
+  → Recordings: endpoint, API key (masked), model, frames per event, a label allow-list, a minimum
+  confidence, a per-event timeout, and the work-queue depth — plus a **Test Connection** button that
+  sends one tiny image through the real path, so a wrong URL, a rejected key, a missing model, and a
+  text-only model stop looking like the same symptom.
+
+  It ships **disabled** because enabling it with the default endpoint sends recorded frames of a
+  user's property to a third party and bills them per event; neither is something anyone should
+  discover by upgrading. Defaults to OpenAI's `gpt-5.6-luna` at roughly $0.003-0.006 per event —
+  point the base URL at a local Ollama and it's free and never leaves the network. The README carries
+  the full cost disclosure; read it before switching this on.
+
+  Generation is deliberately conservative: one event at a time behind a shallow queue that sheds the
+  *oldest* waiting event under a burst (a description of what just happened is worth more than one
+  from ten minutes ago), gated on terminal object-detection events only, and forward-only — nothing
+  predating the feature is backfilled and a failed event is never re-attempted, beyond one automatic
+  retry for transient endpoint failures. Every failure is logged and swallowed: a broken endpoint
+  costs descriptions and cannot affect recording, ingestion, thumbnails, or notifications. The
+  default 90-second timeout is generous on purpose — a local model cold-loading into VRAM on its
+  first request after a restart is slow, and a tight budget would make a working Ollama setup look
+  broken on exactly the request the user is watching.
+
+### Changed
+
+- **Database schema version 3.** The `events` table gained a nullable `description` column, added by
+  migration on existing databases (`NULL` is exactly the right state for every pre-existing event).
+  Deliberately its own column rather than a field inside the existing `raw` JSON: every event
+  lifecycle message rewrites `raw` wholesale, so a description stored there would be silently erased
+  by any late or duplicate `end` message that arrived after generation finished.
+- **`store.BestConfidence` is now exported** (was `bestConfidence`), so the AI-description confidence
+  gate filters on the same ranking that populates the indexed `confidence` column the recordings list
+  filters on, instead of a second implementation that could drift from it.
+
 ## [5.2.0] - 2026-07-25
 
 ### Added
@@ -88,5 +130,6 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
+[5.3.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.3.0
 [5.2.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.2.0
 [0.1.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v0.1.0

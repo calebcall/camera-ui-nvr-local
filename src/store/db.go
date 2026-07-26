@@ -34,7 +34,9 @@ var schemaSQL string
 //   - 1: initial schema (Task 3).
 //   - 2: segments.referenced column (Task 8) — see migrateToV2 and
 //     schema.sql's segments table doc comment.
-const schemaVersion = 2
+//   - 3: events.description column (AI event descriptions) — see migrateToV3
+//     and schema.sql's doc comment on the column.
+const schemaVersion = 3
 
 // dbFileName is the SQLite database file created inside the directory
 // passed to Open.
@@ -190,11 +192,15 @@ func (db *DB) Close() error {
 // schema.sql grew the segments.referenced column: re-running schemaSQL's
 // `CREATE TABLE IF NOT EXISTS segments (...)` against such a database is a
 // no-op (the table already exists) and would silently leave the column
-// missing, so that step uses an explicit ALTER TABLE instead. This is the
-// first version bump since schemaVersion was introduced (Task 3), so this
-// is also the first incremental (non-schemaSQL) migration step in this
-// function — later version bumps should follow the same "current < N" step
-// pattern rather than assuming a fresh install.
+// missing, so that step uses an explicit ALTER TABLE instead.
+//
+// Step 2->3 (current < 3, migrateToV3) is the same shape for the
+// events.description column, and is why every step here is written as an
+// independent "current < N" guard rather than an else-if chain off the
+// starting version: a database left at 1 by a much older build must walk
+// through 2 and then 3 in one Open, and every step must be individually
+// idempotent (each ALTER is guarded by hasColumn) because a fresh install
+// gets all of them from schemaSQL in step 0->1 and then runs them anyway.
 func migrate(conn *sqlite3.Conn) error {
 	current, err := userVersion(conn)
 	if err != nil {
@@ -218,6 +224,12 @@ func migrate(conn *sqlite3.Conn) error {
 		if err := migrateToV2(conn); err != nil {
 			_ = conn.Exec("ROLLBACK")
 			return fmt.Errorf("store: migrate to v2: %w", err)
+		}
+	}
+	if current < 3 {
+		if err := migrateToV3(conn); err != nil {
+			_ = conn.Exec("ROLLBACK")
+			return fmt.Errorf("store: migrate to v3: %w", err)
 		}
 	}
 
@@ -250,6 +262,27 @@ func migrateToV2(conn *sqlite3.Conn) error {
 		return nil
 	}
 	return conn.Exec("ALTER TABLE segments ADD COLUMN referenced INTEGER NOT NULL DEFAULT 1")
+}
+
+// migrateToV3 adds the events.description column (AI event descriptions — see
+// schema.sql's doc comment on the column for why a description lives outside
+// the raw JSON blob) to a database that doesn't have it yet.
+//
+// Nullable with no default, in contrast to migrateToV2's DEFAULT 1: there is
+// no sensible retroactive value for a description, and NULL — "nothing was
+// generated for this event" — is exactly the state every pre-existing event is
+// genuinely in. Guarded by hasColumn so it's a no-op when schemaSQL (a fresh
+// install going straight from version 0) already created the column directly,
+// the same shape migrateToV2 uses.
+func migrateToV3(conn *sqlite3.Conn) error {
+	has, err := hasColumn(conn, "events", "description")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	return conn.Exec("ALTER TABLE events ADD COLUMN description TEXT")
 }
 
 // hasColumn reports whether table has a column named column, via PRAGMA

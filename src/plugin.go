@@ -107,13 +107,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"strings"
 	"sync"
 
 	sdk "github.com/cameraui/sdk/go"
 
+	"github.com/calebcall/plugins/camera-ui-nvr-local/src/describe"
 	"github.com/calebcall/plugins/camera-ui-nvr-local/src/media"
 	"github.com/calebcall/plugins/camera-ui-nvr-local/src/recorder"
 	"github.com/calebcall/plugins/camera-ui-nvr-local/src/store"
@@ -173,6 +177,22 @@ type NVRPlugin struct {
 	// (same guard as events/segments above), and also nil in unit tests
 	// that construct NVRPlugin directly rather than through NewPlugin.
 	thumbs *media.Generator
+
+	// describer generates AI descriptions of detection events (Feature: AI
+	// Descriptions, src/describe) via a user-configured OpenAI-compatible
+	// vision endpoint, and persists them through p.events.SetDescription —
+	// dispatched from attachDetectionIngestion via
+	// detectionEventIngester.describe on every DetectionEvent lifecycle
+	// message.
+	//
+	// Constructed alongside p.thumbs whenever the store opened, and always
+	// constructed there even when the feature is switched OFF: the enabled
+	// check lives inside DescribeAsync (read per event) so the setting
+	// applies without a plugin restart, and an idle Describer costs nothing
+	// but an empty channel and one parked goroutine. nil whenever db is nil
+	// (same guard as events/segments/thumbs above), and also nil in unit
+	// tests that construct NVRPlugin directly rather than through NewPlugin.
+	describer *describe.Describer
 
 	// detectionSubs tracks the per-camera sdk.Disposable returned by
 	// CameraDevice.OnDetectionEvent so OnCameraReleased can unsubscribe
@@ -352,6 +372,39 @@ func (p *NVRPlugin) logRPC(method string, args ...string) {
 // "cap", for N times the intended total).
 const nvrQuotaGBStorageKey = "nvrQuotaGB"
 
+// aiDescriptionsGroup is the collapsible section every AI-description setting
+// is rendered under on /settings/recordings. This feature contributes nine
+// fields plus a button — more than doubling the plugin's whole settings
+// surface — and without a group they would sprawl down the page in between
+// the recording settings that have nothing to do with them, with no visual
+// hint that they only matter together.
+//
+// The group title is declared here, next to the other plugin-level storage
+// keys, but the individual field keys deliberately are NOT: they live in
+// src/describe as describe.Key* because that package both consumes them (to
+// read the values back) and owns their defaults. Keeping the key strings and
+// the code that reads them in the same package is what stops the form and the
+// reader from silently drifting apart — a renamed key here with no
+// corresponding change there would compile fine and just never read anything.
+const aiDescriptionsGroup = "AI Descriptions"
+
+// aiEnabledCondition hides a field until the AI-descriptions master toggle is
+// on, so an unconfigured install sees a single checkbox rather than nine
+// fields and a button it has no use for.
+//
+// Returned fresh on each call rather than shared as a package-level variable,
+// because JsonSchema.Condition is a slice: a single shared value would give
+// every field the same backing array, so anything that mutated one field's
+// condition — the frontend's schema round-trip, a future field that appends a
+// second condition — would silently rewrite the visibility rule of all nine.
+func aiEnabledCondition() []sdk.SchemaCondition {
+	return []sdk.SchemaCondition{{
+		Key:      describe.KeyEnabled,
+		Operator: sdk.SchemaConditionEq,
+		Value:    true,
+	}}
+}
+
 // StorageSchema declares the plugin-level storage schema. sdk.Run calls this
 // (via sdk.StorageSchemaProvider) right after construction and feeds the
 // result into DeviceStorage.DefineSchemas — before RPC handlers are
@@ -375,6 +428,27 @@ const nvrQuotaGBStorageKey = "nvrQuotaGB"
 // meaningful value here ("use this plugin's default storage location", see
 // resolveRecordingsBaseDir in recording_path.go), not a placeholder for
 // something else.
+//
+// The remaining nine fields plus the "Test Connection" button are the AI
+// Descriptions settings, all grouped under aiDescriptionsGroup and all
+// conditional on the master toggle (see aiEnabledCondition). Their keys and
+// defaults come from src/describe rather than being spelled out here, so this
+// form and the code that reads it can never disagree about either. Three
+// things about them are deliberate and worth stating, because each is the kind
+// of choice a later edit would casually undo:
+//
+//   - The toggle defaults to OFF. Turning it on with the default endpoint
+//     sends recorded frames of your property to a third party and bills you
+//     per event; that is not a decision a plugin gets to make on a user's
+//     behalf by shipping it pre-enabled.
+//   - Every Description here explains the COST consequence, not just the
+//     mechanic. "Frames Per Event" is not self-evidently the difference
+//     between $0.003 and $0.012 an event, and a user who discovers that from
+//     an invoice rather than from the help text was failed by this form.
+//   - The API key uses StringFormatPassword so it renders masked. It is stored
+//     in the same plaintext DeviceStorage as everything else — the format only
+//     stops it being shoulder-surfed off a settings page, and claiming more
+//     than that would be a lie.
 func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 	storeTrue := true
 	return []sdk.JsonSchema{
@@ -401,7 +475,217 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Description: "Optional custom directory where new recordings (and their thumbnails) are written, e.g. an external drive or network share mounted on this host. Leave empty to use this plugin's default storage location. Changing this only affects NEW recordings — existing recordings stay where they are and remain playable.",
 			Store:       &storeTrue,
 		},
+		{
+			Type:         sdk.JsonSchemaTypeBoolean,
+			Key:          describe.KeyEnabled,
+			Title:        "Enable AI Descriptions",
+			Description:  "Generate a written description of each detection event using a vision model, shown on event cards, in the recordings list, and over the player. OFF by default: with the default settings below this sends recorded frames to OpenAI's paid API and costs roughly $0.003-0.006 per event. Point the endpoint at a local Ollama instead to keep everything on your own hardware for free.",
+			DefaultValue: false,
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+		},
+		{
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          describe.KeyBaseURL,
+			Title:        "API Base URL",
+			Description:  "Any OpenAI-compatible endpoint. Use https://api.openai.com/v1 for OpenAI, or http://localhost:11434/v1 for a local Ollama (also works with LM Studio, vLLM, llama.cpp, and OpenRouter).",
+			Placeholder:  describe.DefaultBaseURL,
+			DefaultValue: describe.DefaultBaseURL,
+			Required:     true,
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+			Condition:    aiEnabledCondition(),
+		},
+		{
+			Type:        sdk.JsonSchemaTypeString,
+			Key:         describe.KeyAPIKey,
+			Title:       "API Key",
+			Description: "Required for hosted providers like OpenAI. Leave empty for a local endpoint that doesn't authenticate, such as a default Ollama install.",
+			Format:      sdk.StringFormatPassword,
+			Group:       aiDescriptionsGroup,
+			Store:       &storeTrue,
+			Condition:   aiEnabledCondition(),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeString,
+			Key:          describe.KeyModel,
+			Title:        "Model",
+			Description:  "A vision-capable model. Defaults to " + describe.DefaultModel + ", OpenAI's cost-efficient high-volume tier; move up to gpt-5.6-terra if descriptions read too generic. For Ollama use a local vision model name such as qwen2.5vl:7b.",
+			Placeholder:  describe.DefaultModel,
+			DefaultValue: describe.DefaultModel,
+			Required:     true,
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+			Condition:    aiEnabledCondition(),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeNumber,
+			Key:          describe.KeyFrameCount,
+			Title:        "Frames Per Event",
+			Description:  "How many frames across the event are sent to the model. More frames describe motion better but cost proportionally more — this is the single biggest cost lever here.",
+			DefaultValue: float64(describe.DefaultFrameCount),
+			Minimum:      sdk.Float64(1),
+			Maximum:      sdk.Float64(8),
+			Step:         sdk.Float64(1),
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+			Condition:    aiEnabledCondition(),
+		},
+		{
+			Type:        sdk.JsonSchemaTypeString,
+			Key:         describe.KeyLabels,
+			Title:       "Only Describe These Labels",
+			Description: "Comma-separated detection labels, e.g. \"person,vehicle\". Leave empty to describe every detection event. A real cost control, not a nicety: a camera facing a public road can otherwise generate thousands of paid requests a day.",
+			Placeholder: "person,vehicle",
+			Group:       aiDescriptionsGroup,
+			Store:       &storeTrue,
+			Condition:   aiEnabledCondition(),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeNumber,
+			Key:          describe.KeyMinConfidence,
+			Title:        "Minimum Confidence",
+			Description:  "Skip events whose best detection scores below this. 0 describes everything that passes the label filter.",
+			DefaultValue: float64(0),
+			Minimum:      sdk.Float64(0),
+			Maximum:      sdk.Float64(1),
+			Step:         sdk.Float64(0.05),
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+			Condition:    aiEnabledCondition(),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeNumber,
+			Key:          describe.KeyTimeoutSeconds,
+			Title:        "Timeout (seconds)",
+			Description:  "How long one description may take, covering both frame extraction and the model call. The default is deliberately generous because a local model cold-loading into VRAM on its first request is slow.",
+			DefaultValue: float64(describe.DefaultTimeoutSeconds),
+			Minimum:      sdk.Float64(10),
+			Maximum:      sdk.Float64(600),
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+			Condition:    aiEnabledCondition(),
+		},
+		{
+			Type:         sdk.JsonSchemaTypeNumber,
+			Key:          describe.KeyQueueDepth,
+			Title:        "Queue Depth",
+			Description:  "How many pending events wait for description before the oldest is dropped. Descriptions are generated one at a time. Changing this takes effect after a plugin restart, unlike every other setting here.",
+			DefaultValue: float64(describe.DefaultQueueDepth),
+			Minimum:      sdk.Float64(1),
+			Maximum:      sdk.Float64(64),
+			Step:         sdk.Float64(1),
+			Group:        aiDescriptionsGroup,
+			Store:        &storeTrue,
+			Condition:    aiEnabledCondition(),
+		},
+		{
+			Type:        sdk.JsonSchemaTypeSubmit,
+			Key:         aiTestConnectionKey,
+			Title:       "Test Connection",
+			Description: "Sends one tiny image to the endpoint above and reports what came back. Use this to tell a wrong URL, a bad key, a missing model, and a text-only model apart.",
+			Color:       sdk.ButtonColorInfo,
+			Group:       aiDescriptionsGroup,
+			Condition:   aiEnabledCondition(),
+			OnClick:     p.testAIConnection,
+		},
 	}
+}
+
+// aiTestConnectionKey identifies the "Test Connection" submit field. Unlike
+// every other key in this group it names an action rather than a setting, so it
+// stays here instead of in src/describe (which never reads it) and carries no
+// Store: there is no value to persist — pressing the button runs
+// testAIConnection and the response is a transient toast.
+const aiTestConnectionKey = "aiTestConnection"
+
+// testAIConnection is the OnClick handler behind the "Test Connection" button
+// in the AI Descriptions settings group. It sends one tiny generated JPEG
+// through exactly the same config load and HTTP client a real event uses, then
+// reports the outcome as a toast.
+//
+// This exists because a bring-your-own-endpoint feature has four completely
+// different failure modes that all present to the user as the same symptom —
+// "descriptions never appear": a wrong base URL, a rejected API key, a model
+// name that doesn't exist on that server, and a model with no vision
+// capability. Without this button, diagnosing which one you have means
+// correlating plugin logs against events that may take minutes to arrive.
+//
+// Sending a real image rather than a text-only probe is the load-bearing
+// detail: a text-only model answers a plain "hello" request perfectly happily
+// and would pass any connectivity check, then fail on every actual event. The
+// only way to detect that from a settings page is to make the test request the
+// same *shape* as a real one.
+//
+// The submitted form value is ignored — the button carries no value of its
+// own, and the fields it tests were already persisted by the form before
+// OnClick fires, so reading them back out of storage (rather than trusting a
+// payload) is both simpler and closer to what the real path does.
+//
+// Errors are returned as toasts, never as Go errors: this is a diagnostic, and
+// "the endpoint rejected your key" is a successful diagnosis, not a failure of
+// the handler.
+func (p *NVRPlugin) testAIConnection(_ any) *sdk.FormSubmitResponse {
+	cfg := describe.Load(p.store)
+	if err := cfg.Validate(); err != nil {
+		return aiToast(sdk.ToastError, err.Error())
+	}
+
+	frame, err := probeFrame()
+	if err != nil {
+		return aiToast(sdk.ToastError, fmt.Sprintf("could not build a test image: %v", err))
+	}
+
+	// Bounded by the user's own configured timeout rather than a shorter
+	// test-only one, so a slow endpoint that nonetheless works (an Ollama
+	// cold-loading a model into VRAM) reports success here exactly as it
+	// would in production, instead of failing a test the real path passes.
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	desc, err := describe.NewClient().Complete(ctx, cfg, "This is a connection test. Describe this image in one short sentence.", [][]byte{frame})
+	if err != nil {
+		return aiToast(sdk.ToastError, fmt.Sprintf("%s failed: %v", cfg.Model, err))
+	}
+
+	// Echoing the model's own Title back proves the whole round trip: the
+	// server was reachable, the key was accepted, the model exists, it could
+	// see the image, and it returned JSON in the shape this plugin parses.
+	return aiToast(sdk.ToastSuccess, fmt.Sprintf("%s responded: %s", cfg.Model, desc.Title))
+}
+
+// aiToast wraps one message in the FormSubmitResponse shape the settings form
+// expects. A trivial helper, but testAIConnection has four return points and
+// spelling out three levels of nested struct literal at each of them buried
+// the actual messages.
+func aiToast(kind sdk.ToastType, message string) *sdk.FormSubmitResponse {
+	return &sdk.FormSubmitResponse{Toast: &sdk.ToastMessage{
+		Type:    kind,
+		Message: message,
+	}}
+}
+
+// probeFrame builds a small valid JPEG for testAIConnection to send.
+//
+// Encoded at call time rather than embedded as a base64 constant so there is
+// no opaque blob in the source that no reader can verify is really an image
+// (or really harmless). Grayscale and 64x64 because the content is irrelevant
+// — the test asks whether the endpoint can accept and decode an image at all,
+// not what is in it — and a few hundred bytes keeps the probe far cheaper than
+// any real event.
+func probeFrame() ([]byte, error) {
+	img := image.NewGray(image.Rect(0, 0, 64, 64))
+	// A gradient rather than a flat fill: a uniform image compresses to almost
+	// nothing, and an implausibly tiny payload is exactly the kind of thing a
+	// strict endpoint might reject as malformed.
+	for i := range img.Pix {
+		img.Pix[i] = uint8(i % 256)
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, nil); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // nvrQuotaGB reads the current instance-wide disk cap (see
@@ -506,6 +790,30 @@ func NewPlugin(logger *sdk.Logger, api *sdk.PluginAPI, storage *sdk.DeviceStorag
 		// base dir is actually configured.
 		p.thumbs = media.NewGenerator(p.recordingsDir, ff.Path(), p.segments, p.events, p.Logger)
 
+		// Wires detectionEventIngester's AI description generation (Feature:
+		// AI Descriptions, events_ingest.go's describe): a
+		// media.FrameSampler over the same p.segments and resolved ffmpeg
+		// binary ff.Path() that p.thumbs above already uses — sampling
+		// several frames across an event's window is the same "look up the
+		// covering segment, exec ffmpeg against it" shape as generating one
+		// thumbnail from it — plus p.events to persist the result
+		// (SetDescription, its own column so Upsert can't clobber it),
+		// p.recorder to resolve a camera's display name for the prompt
+		// (CameraName: "Sideyard" is a location a model can reason about, a
+		// UUID isn't), and p.store — this plugin's OWN instance-level
+		// DeviceStorage, not any camera's — as the settings source, which
+		// describe re-reads per event so a settings edit needs no restart.
+		//
+		// Constructed unconditionally, even with aiDescriptionsEnabled
+		// false: see the describer field's own doc comment.
+		p.describer = describe.NewDescriber(
+			p.store,
+			media.NewFrameSampler(ff.Path(), p.segments, p.Logger),
+			p.events,
+			p.recorder,
+			p.Logger,
+		)
+
 		// Wires NvrScrub/NvrPreviewFrames (rpc_playback.go, Task SCRUB):
 		// same p.segments (via CoveringSegmentForRole) and resolved
 		// ffmpeg binary as p.thumbs above, since scrub/preview frame
@@ -589,6 +897,17 @@ func NewPlugin(logger *sdk.Logger, api *sdk.PluginAPI, storage *sdk.DeviceStorag
 		p.recorder.StopReconcile()
 		p.recorder.StopAll()
 		p.recorder.StopRetention()
+		// Close stops the Describer accepting new work (a detection callback
+		// arriving after this point has its event dropped, deliberately and
+		// safely — see Describer.Close), lets its worker drain whatever is
+		// already queued, and blocks until that worker has exited. Called
+		// BEFORE db.Close below for the same reason StopAll is: an in-flight
+		// SetDescription must not still be writing into a connection that has
+		// already gone away. Bounded by one event's remaining aiTimeoutSeconds
+		// plus the queued events behind it.
+		if p.describer != nil {
+			p.describer.Close()
+		}
 		if p.db != nil {
 			if err := p.db.Close(); err != nil {
 				p.Logger.Error("nvr-local: close store failed:", err)
@@ -849,6 +1168,19 @@ func (p *NVRPlugin) attachDetectionIngestion(cam *sdk.CameraDevice) {
 	// satisfies cameraNamer directly (recorder.RecorderManager.CameraName),
 	// so notify (events_ingest.go) can title a notification with a camera's
 	// real display name instead of falling back to its bare ID.
-	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, p.Logger)
+	//
+	// p.describer (Feature: AI Descriptions) is wrapped into the
+	// eventDescriber interface only when it's actually non-nil, for the
+	// identical typed-nil reason documented for thumbs above: describe's
+	// nil-check (i.describer == nil) compares the *interface* to nil, and an
+	// interface holding a typed nil *describe.Describer would compare != nil
+	// and then nil-pointer-panic on the first DescribeAsync call. Set
+	// alongside p.thumbs/p.events in NewPlugin (all nil together whenever
+	// store.Open failed), so this is defensive in the same cheap way.
+	var describer eventDescriber
+	if p.describer != nil {
+		describer = p.describer
+	}
+	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, p.Logger)
 	p.detectionSubs.add(cam.ID(), cam.OnDetectionEvent(ingester.handle))
 }

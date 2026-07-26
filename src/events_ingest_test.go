@@ -41,7 +41,7 @@ func (f *fakeEventStore) Upsert(events []store.DetectionEvent) error {
 // a synthetic detection event into the store unchanged.
 func TestDetectionEventIngester_Handle_UpsertsTheEvent(t *testing.T) {
 	fake := &fakeEventStore{}
-	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil, nil)
 
 	event := sdk.DetectionEvent{
 		ID:        "evt-1",
@@ -68,7 +68,7 @@ func TestDetectionEventIngester_Handle_UpsertsTheEvent(t *testing.T) {
 // handler must not skip or coalesce them itself.
 func TestDetectionEventIngester_Handle_ReplacesOnUpdate(t *testing.T) {
 	fake := &fakeEventStore{}
-	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateActive, StartTime: 1000,
@@ -93,7 +93,7 @@ func TestDetectionEventIngester_Handle_ReplacesOnUpdate(t *testing.T) {
 // there's nowhere to log to either).
 func TestDetectionEventIngester_Handle_LogsAndSwallowsStoreErrors(t *testing.T) {
 	fake := &fakeEventStore{err: errors.New("boom")}
-	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{ID: "evt-1", CameraID: "cam1"})
 }
@@ -140,7 +140,7 @@ func (f *fakeRecorderLookup) RecorderFor(cameraID string) (eventRecorder, bool) 
 func TestDetectionEventIngester_Handle_CallsMarkEventOnRegisteredRecorder(t *testing.T) {
 	spy := &spyRecorder{}
 	lookup := &fakeRecorderLookup{recorders: map[string]eventRecorder{"cam1": spy}}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, lookup, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, lookup, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000, EndTime: 6000,
@@ -166,7 +166,7 @@ func TestDetectionEventIngester_Handle_CallsMarkEventOnRegisteredRecorder(t *tes
 func TestDetectionEventIngester_Handle_StartThenEndLifecycle_CallsMarkEventForBoth(t *testing.T) {
 	spy := &spyRecorder{}
 	lookup := &fakeRecorderLookup{recorders: map[string]eventRecorder{"cam1": spy}}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, lookup, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, lookup, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateActive, StartTime: 1000,
@@ -192,7 +192,7 @@ func TestDetectionEventIngester_Handle_StartThenEndLifecycle_CallsMarkEventForBo
 // isn't in events mode — even though a lookup is configured.
 func TestDetectionEventIngester_Handle_SkipsMarkEventWhenNoRecorderRegistered(t *testing.T) {
 	lookup := &fakeRecorderLookup{recorders: map[string]eventRecorder{}}
-	ingester := newDetectionEventIngester(&fakeEventStore{}, lookup, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, lookup, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam-unregistered", StartTime: 1000,
@@ -206,7 +206,7 @@ func TestDetectionEventIngester_Handle_SkipsMarkEventWhenNoRecorderRegistered(t 
 // doesn't care about event-mode wiring, matching newDetectionEventIngester's
 // doc comment) without panicking.
 func TestDetectionEventIngester_Handle_SkipsMarkEventWhenLookupNil(t *testing.T) {
-	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil, nil)
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{ID: "evt-1", CameraID: "cam1", StartTime: 1000})
 }
 
@@ -248,7 +248,7 @@ func (f *fakeCoverageChecker) CoversRange(cameraID string, startMs, endMs int64)
 func TestDetectionEventIngester_Handle_SetsHasRecordingWhenCovered(t *testing.T) {
 	fake := &fakeEventStore{}
 	coverage := &fakeCoverageChecker{covered: true}
-	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000,
@@ -268,7 +268,7 @@ func TestDetectionEventIngester_Handle_SetsHasRecordingWhenCovered(t *testing.T)
 func TestDetectionEventIngester_Handle_LeavesHasRecordingFalseWhenNotCovered(t *testing.T) {
 	fake := &fakeEventStore{}
 	coverage := &fakeCoverageChecker{covered: false}
-	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000,
@@ -289,7 +289,7 @@ func TestDetectionEventIngester_Handle_LeavesHasRecordingFalseWhenNotCovered(t *
 func TestDetectionEventIngester_Handle_RecomputesHasRecordingOnEndMessage(t *testing.T) {
 	fake := &fakeEventStore{}
 	coverage := &fakeCoverageChecker{covered: false}
-	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000,
@@ -326,7 +326,7 @@ func TestDetectionEventIngester_Handle_RecomputesHasRecordingOnEndMessage(t *tes
 // HasRecording value untouched rather than forcing it to false.
 func TestDetectionEventIngester_Handle_NilCoverageLeavesHasRecordingUnchanged(t *testing.T) {
 	fake := &fakeEventStore{}
-	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, nil, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000, HasRecording: true,
@@ -344,7 +344,7 @@ func TestDetectionEventIngester_Handle_NilCoverageLeavesHasRecordingUnchanged(t 
 func TestDetectionEventIngester_Handle_CoverageErrorLeavesHasRecordingUnchanged(t *testing.T) {
 	fake := &fakeEventStore{}
 	coverage := &fakeCoverageChecker{coverageErr: errors.New("boom")}
-	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, nil, nil, coverage, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000, HasRecording: true,
@@ -367,7 +367,7 @@ func TestDetectionEventIngester_Handle_ActiveRecordingSetsHasRecordingWithoutCov
 	fake := &fakeEventStore{}
 	coverage := &fakeCoverageChecker{covered: false}
 	lookup := &fakeRecorderLookup{recorders: map[string]eventRecorder{"cam1": &spyRecorder{}}}
-	ingester := newDetectionEventIngester(fake, lookup, nil, coverage, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, lookup, nil, coverage, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded, StartTime: 1000, EndTime: 5000,
@@ -387,7 +387,7 @@ func TestDetectionEventIngester_Handle_NoActiveRecordingFallsBackToCoverage(t *t
 	fake := &fakeEventStore{}
 	coverage := &fakeCoverageChecker{covered: false}
 	lookup := &fakeRecorderLookup{recorders: map[string]eventRecorder{}}
-	ingester := newDetectionEventIngester(fake, lookup, nil, coverage, nil, nil, nil)
+	ingester := newDetectionEventIngester(fake, lookup, nil, coverage, nil, nil, nil, nil)
 
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
 		ID: "evt-1", CameraID: "cam1", StartTime: 1000,
@@ -418,7 +418,7 @@ func TestDetectionEventIngester_Handle_RealSegmentStore_LinksHasRecordingEndToEn
 		t.Fatalf("segments.Add: %v", err)
 	}
 
-	ingester := newDetectionEventIngester(p.events, nil, nil, p.segments, nil, nil, nil)
+	ingester := newDetectionEventIngester(p.events, nil, nil, p.segments, nil, nil, nil, nil)
 
 	// Covered: cam1's start time (12_000) falls inside the indexed segment.
 	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
@@ -519,4 +519,110 @@ func TestDetectionSubscriptions_AddReplacesExisting(t *testing.T) {
 	if !firstDisposed {
 		t.Fatalf("expected the first subscription to be disposed when replaced")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// AI Descriptions wiring: handle -> eventDescriber.DescribeAsync
+// ---------------------------------------------------------------------------
+
+// spyDescriber is an eventDescriber test double recording every event handed
+// to DescribeAsync, so handle's describe step can be asserted without a real
+// *describe.Describer (which would need a settings source, an ffmpeg-backed
+// frame sampler, and a reachable inference endpoint). Deliberately dumb: it
+// applies none of DescribeAsync's own gating, because the point of these
+// tests is what handle forwards, not what the real Describer then chooses to
+// do with it — that gating is tested in src/describe. Guarded by mu for the
+// same no-single-goroutine-guarantee reason every other ingester fake in this
+// package is.
+type spyDescriber struct {
+	mu        sync.Mutex
+	described []store.DetectionEvent
+}
+
+func (s *spyDescriber) DescribeAsync(event store.DetectionEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.described = append(s.described, event)
+}
+
+func (s *spyDescriber) calls() []store.DetectionEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]store.DetectionEvent(nil), s.described...)
+}
+
+// TestDetectionEventIngester_Describe_ForwardsMergedEventOnEveryMessage is the
+// core proof of the AI-description wiring, and it asserts two things at once.
+//
+// First, handle hands EVERY lifecycle message to the describer rather than
+// pre-filtering to the terminal one: *describe.Describer.DescribeAsync owns
+// the whole gate (terminal, has-detections, enabled, label allow-list,
+// confidence floor, dedup — see its doc comment), exactly as
+// generateThumbnail delegates that judgement to media.Generator. Duplicating
+// the terminal check here would be two definitions of the same rule that can
+// drift apart.
+//
+// Second — and this is what would actually break in production if handle
+// passed the wrong value — the event forwarded is `merged`, not the raw
+// message. A terminal 'end' message is routinely observed to arrive sparse
+// (Segments:[], no Types), so a describer handed the raw message would sample
+// frames for an event it believes has no detections at all and be gated out
+// by store.EventHasDetections. The sparse terminal message below therefore
+// must still arrive carrying the detections the earlier 'start' message
+// reported.
+func TestDetectionEventIngester_Describe_ForwardsMergedEventOnEveryMessage(t *testing.T) {
+	spy := &spyDescriber{}
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, spy, nil)
+
+	ingester.handle(sdk.DetectionEventStart, sdk.DetectionEvent{
+		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateActive,
+		StartTime: 1000,
+		Types:     []string{"motion", "person"},
+		Segments: []sdk.EventSegment{
+			{Detections: []sdk.EventDetection{{Label: "person", Score: 0.9}}},
+		},
+	})
+
+	// The sparse terminal message: no Types, no Segments of its own.
+	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
+		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
+		StartTime: 1000, EndTime: 5000,
+	})
+
+	described := spy.calls()
+	if len(described) != 2 {
+		t.Fatalf("expected handle to forward every lifecycle message to the describer (2 total), got %d", len(described))
+	}
+
+	terminal := described[1]
+	if terminal.ID != "evt-1" {
+		t.Errorf("expected the terminal message's event id evt-1, got %q", terminal.ID)
+	}
+	if terminal.EndTime != 5000 {
+		t.Errorf("expected the terminal message's EndTime 5000 (the description path needs the full window), got %d", terminal.EndTime)
+	}
+	if len(terminal.Segments) == 0 {
+		t.Errorf("expected the merged event's accumulated segments to survive a sparse terminal message, got %+v", terminal)
+	}
+	if !store.EventHasDetections(terminal) {
+		t.Errorf("expected the merged event to still read as an object-detection event (Types %v), or the describer's own gate silently drops it", terminal.Types)
+	}
+}
+
+// TestDetectionEventIngester_Describe_NilDescriberIsSafe proves handle
+// tolerates a nil eventDescriber — every caller that doesn't wire the feature
+// (unit tests, and a plugin instance whose store never opened), matching every
+// other optional dependency on detectionEventIngester — without panicking on
+// an event that would otherwise be described.
+func TestDetectionEventIngester_Describe_NilDescriberIsSafe(t *testing.T) {
+	ingester := newDetectionEventIngester(&fakeEventStore{}, nil, nil, nil, nil, nil, nil, nil)
+
+	ingester.handle(sdk.DetectionEventEnd, sdk.DetectionEvent{
+		ID: "evt-1", CameraID: "cam1", State: sdk.DetectionEventStateEnded,
+		StartTime: 1000, EndTime: 5000,
+		Types: []string{"person"},
+		Segments: []sdk.EventSegment{
+			{Detections: []sdk.EventDetection{{Label: "person", Score: 0.9}}},
+		},
+	})
 }
