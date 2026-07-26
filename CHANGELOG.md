@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.6.0] - 2026-07-26
+
+### Added
+
+- **Per-camera notification overrides.** A camera can now have its own notification settings instead
+  of following the plugin-wide ones. Open the camera's drawer → Plugins tab → NVR (Local) — where its
+  recording mode and retention already live — and turn on **Override notification settings** to reveal
+  that camera's own five toggles. While the override is off, the camera inherits the global settings,
+  so nothing changes for anyone who does not opt in.
+
+  Overrides **replace** the global settings for that camera rather than narrowing them, so a camera can
+  be more permissive as well as stricter: Vehicle can be off globally and on for the one camera
+  watching the driveway. ANDing the two was rejected precisely because it would make that impossible.
+
+### Changed
+
+- **Per-camera schema declaration is now additive.** `readRecordingConfig` previously called
+  `DeviceStorage.DefineSchemas`, which **replaces** a scope's entire schema list — and it runs on every
+  reconcile tick. Since a camera's storage scope is shared by everything this plugin declares for that
+  camera, any second set of fields would have survived only until the next tick and then silently
+  vanished from the settings form. Declaration now goes through `HasSchema`/`AddSchema`, and
+  `recorder.CameraStorage` no longer exposes `DefineSchemas` at all, so the clobbering case is not
+  merely avoided but unrepresentable. This was prerequisite work: per-camera AI settings and face
+  recognition would have hit the identical wall.
+
+### Fixed
+
+- **Documentation corrected.** The README and issue #16 both claimed the plugin API exposes no
+  per-camera settings hook. That was wrong — `CameraDevice.Storage()` provides storage scoped per
+  plugin and per camera, the camera drawer's Plugins tab already renders it for hub-role plugins, and
+  this plugin has been shipping per-camera recording settings through exactly that mechanism since
+  before AI descriptions existed.
+
 ## [5.5.0] - 2026-07-26
 
 ### Added
@@ -211,6 +244,7 @@ the existing camera.ui frontend contract, so the unmodified web/mobile UI drives
   registration. Background push to the camera.ui app requires camera.ui's proprietary cloud relay and
   is intentionally out of scope for a local plugin.
 
+[5.6.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.6.0
 [5.5.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.5.0
 [5.4.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.4.0
 [5.3.0]: https://github.com/calebcall/camera-ui-nvr-local/releases/tag/v5.3.0

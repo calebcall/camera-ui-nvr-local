@@ -67,7 +67,8 @@ var defaultRoles = []string{string(sdk.CameraRoleHighRes)}
 // place a real *sdk.CameraDevice's Storage() is bridged to this interface.
 type CameraStorage interface {
 	GetValue(key string, defaultValue ...any) any
-	DefineSchemas(schemas []sdk.JsonSchema)
+	HasSchema(key string) bool
+	AddSchema(schema *sdk.JsonSchema) error
 }
 
 // ManagedCamera is the minimal camera shape RecorderManager needs: enough to
@@ -1004,8 +1005,33 @@ func recordingConfigSchema() []sdk.JsonSchema {
 // stored anything yet — it can't retroactively fix an already-empty stored
 // value. This was the actual production bug: every managed camera started
 // its Recorder with roles=[] and recorded nothing.
+// declareCameraSchemas registers each schema on storage if it is not already
+// present, leaving any field declared by another part of this plugin alone.
+//
+// It must NOT use DeviceStorage.DefineSchemas, which REPLACES the whole schema
+// list for the scope (sdk storage.go: `ds.Schemas = schemas`). A camera's
+// storage scope is shared by everything this plugin declares for that camera —
+// recording config here, notification overrides in the parent package, and
+// whatever comes next — so a full replace means whichever code ran last wins
+// and the rest silently vanish from the settings form. readRecordingConfig is
+// called on every reconcile tick, so it would win constantly.
+//
+// AddSchema's "already exists" error is the expected steady state (every call
+// after the first), which is why presence is checked first rather than treated
+// as a failure. A genuine AddSchema error is ignored for the same reason the
+// rest of this path is forgiving: a schema that fails to register costs a field
+// in the settings form, and must not stop a camera from recording.
+func declareCameraSchemas(storage CameraStorage, schemas []sdk.JsonSchema) {
+	for i := range schemas {
+		if storage.HasSchema(schemas[i].Key) {
+			continue
+		}
+		_ = storage.AddSchema(&schemas[i])
+	}
+}
+
 func readRecordingConfig(storage CameraStorage) RecordingConfig {
-	storage.DefineSchemas(recordingConfigSchema())
+	declareCameraSchemas(storage, recordingConfigSchema())
 
 	mode, _ := storage.GetValue(keyRecordingMode, string(RecordingModeOff)).(string)
 	recordingMode := RecordingMode(mode)
