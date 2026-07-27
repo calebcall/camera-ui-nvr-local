@@ -230,3 +230,60 @@ func minInt(a, b int) int {
 	}
 	return b
 }
+
+// TestScrub_FallsBackWhenRequestedRoleWasNeverRecorded is the regression
+// test for the production bug: the recorder writes only high-resolution,
+// but the frontend's quality selector offers every role the camera's
+// sources advertise, so asking for "low" reported no recording available
+// for a moment that is fully covered on disk.
+func TestScrub_FallsBackWhenRequestedRoleWasNeverRecorded(t *testing.T) {
+	requireFFmpeg(t)
+
+	seg := genFixtureSegment(t, t.TempDir(), 10_000, 3)
+	seg.Role = scrubFixtureRole // high-resolution, the only role recorded
+
+	segments := newTestSegmentStore(t)
+	if _, err := segments.Add(seg); err != nil {
+		t.Fatalf("segments.Add: %v", err)
+	}
+
+	scrubber := NewScrubber(resolvedFFmpegPath(), segments, nil)
+
+	result, err := scrubber.Scrub(context.Background(), "cam1", 11_500_000, "low")
+	if err != nil {
+		t.Fatalf("Scrub: %v", err)
+	}
+	if !result.Found {
+		t.Fatal("expected the high-resolution segment covering this moment, got Found=false")
+	}
+	if len(result.Frame) == 0 {
+		t.Error("expected a non-empty frame from the fallback segment")
+	}
+	if result.SegmentStartMs != seg.StartMs {
+		t.Errorf("expected the covering segment %d, got %d", seg.StartMs, result.SegmentStartMs)
+	}
+}
+
+// A timestamp outside every recorded segment must still report not-found:
+// the fallback widens which role is acceptable, never which moment is.
+func TestScrub_StillReportsGenuineGaps(t *testing.T) {
+	requireFFmpeg(t)
+
+	seg := genFixtureSegment(t, t.TempDir(), 10_000, 3)
+	seg.Role = scrubFixtureRole
+
+	segments := newTestSegmentStore(t)
+	if _, err := segments.Add(seg); err != nil {
+		t.Fatalf("segments.Add: %v", err)
+	}
+
+	scrubber := NewScrubber(resolvedFFmpegPath(), segments, nil)
+
+	result, err := scrubber.Scrub(context.Background(), "cam1", 99_000_000, "low")
+	if err != nil {
+		t.Fatalf("Scrub: %v", err)
+	}
+	if result.Found {
+		t.Fatal("expected not-found for a timestamp no segment covers")
+	}
+}

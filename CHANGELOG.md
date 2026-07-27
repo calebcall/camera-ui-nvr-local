@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.7.1] - 2026-07-27
+
+### Fixed
+
+- **Playback no longer reports "no recording available" for a stream quality that was never
+  recorded.** The recorder writes only the roles a camera is configured for — by default just
+  `high-resolution` — while the frontend's quality selector offers every role the camera's *sources*
+  advertise. Scrub and playback matched the requested role strictly, so every option except the
+  recorded one reported nothing for moments that are fully covered on disk. Verified on a live
+  install: a `sourceRole="low"` request returned `segmentFound=false` at a timestamp where a
+  `high-resolution` segment spanning it existed.
+
+  The requested role still wins whenever it has footage. Only when it has none does playback fall
+  back to whichever role was recorded, preferring high over mid over low. A timestamp no segment
+  covers in any role still reports not-found, unchanged — the fallback widens which role is
+  acceptable, never which moment is.
+
+  This matters more as cameras advertise more streams: `@calebcall/camera-ui-amcrest` 1.3.0 registers
+  every enabled camera stream, so a re-adopted camera now offers three roles where it offered two.
+
 ## [5.7.0] - 2026-07-26
 
 ### Changed

@@ -61,11 +61,13 @@ const defaultPreviewCount = 10
 var videoResolutionRe = regexp.MustCompile(`Stream #\d+:\d+[^:]*: Video:.*?,\s*(\d+)x(\d+)[,\s]`)
 
 // ScrubSegmentFinder is the subset of *store.SegmentStore Scrubber needs:
-// finding the recorded segment (if any) for a specific camera+role covering
-// a moment in time. *store.SegmentStore satisfies this directly via
-// CoveringSegmentForRole.
+// finding the recorded segment (if any) covering a moment in time, both for
+// a specific role and — when that role was never recorded — for whichever
+// role was (see coveringSegmentForRoleOrAny, role_fallback.go).
+// *store.SegmentStore satisfies this directly.
 type ScrubSegmentFinder interface {
 	CoveringSegmentForRole(cameraID, role string, atMs int64) (store.Segment, bool, error)
+	CoveringSegment(cameraID string, atMs int64) (store.Segment, bool, error)
 }
 
 // frameCommandRunner abstracts running one ffmpeg invocation and capturing
@@ -219,9 +221,9 @@ func scrubOffsetSeconds(seg store.Segment, tsUs int64) float64 {
 func (s *Scrubber) Scrub(ctx context.Context, cameraID string, tsUs int64, sourceRole string) (ScrubResult, error) {
 	role := resolveRole(sourceRole)
 
-	seg, ok, err := s.segments.CoveringSegmentForRole(cameraID, role, tsUs/1000)
+	seg, ok, err := coveringSegmentForRoleOrAny(s.segments, cameraID, role, tsUs/1000)
 	if err != nil {
-		return ScrubResult{}, fmt.Errorf("media: find covering segment: %w", err)
+		return ScrubResult{}, err
 	}
 	if !ok {
 		return ScrubResult{}, nil
