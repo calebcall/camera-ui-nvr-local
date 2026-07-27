@@ -117,6 +117,7 @@ func splitAccessUnits(data []byte) []AccessUnit {
 // this directly.
 type PlaybackSegmentFinder interface {
 	CoveringSegmentForRole(cameraID, role string, atMs int64) (store.Segment, bool, error)
+	CoveringSegment(cameraID string, atMs int64) (store.Segment, bool, error)
 	InRange(cameraID, role string, startMs, endMs int64) ([]store.Segment, error)
 }
 
@@ -199,9 +200,14 @@ func NewPlayer(ffmpegPath string, segments PlaybackSegmentFinder, log *sdk.Logge
 func (p *Player) FirstSegment(ctx context.Context, cameraID string, tsUs int64, sourceRole string) (SegmentFrames, bool, error) {
 	role := resolveRole(sourceRole)
 
-	seg, ok, err := p.segments.CoveringSegmentForRole(cameraID, role, tsUs/1000)
+	// The role the caller asked for is preferred, but a role the recorder
+	// never wrote must not read as "no recording" when footage exists —
+	// see coveringSegmentForRoleOrAny (role_fallback.go). NextSegment then
+	// rolls over within whatever role this resolved to, since it keys off
+	// the returned segment's own role.
+	seg, ok, err := coveringSegmentForRoleOrAny(p.segments, cameraID, role, tsUs/1000)
 	if err != nil {
-		return SegmentFrames{}, false, fmt.Errorf("media: find covering segment: %w", err)
+		return SegmentFrames{}, false, err
 	}
 	if !ok {
 		return SegmentFrames{}, false, nil
