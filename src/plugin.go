@@ -1220,10 +1220,13 @@ func (c sdkManagedCamera) CoreRecordingSettings() sdk.CameraRecordingSettings {
 // switching on the known role constants keeps this forward-compatible with
 // any role string a camera's config happens to store, without this adapter
 // needing to enumerate sdk.CameraRole's cases itself.
+// The backchannel request core bakes into the source URL is stripped: a
+// recorder only ever pulls, and asking for one on a stream that has none
+// corrupts the recorded audio's timestamps (see recording_url.go).
 func (c sdkManagedCamera) StreamURL(role string) (string, error) {
 	for _, src := range c.dev.Sources() {
 		if string(src.Role()) == role {
-			return src.SourceURL(), nil
+			return stripBackchannel(src.SourceURL()), nil
 		}
 	}
 	return "", fmt.Errorf("nvr-local: camera %s: no stream source for role %q", c.dev.ID(), role)

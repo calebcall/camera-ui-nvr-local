@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.8.2] - 2026-07-27
+
+### Fixed
+
+- **Recording a second stream from a camera no longer crash-loops.** The recorder opened its input
+  through the URL camera.ui builds for general streaming, which asks go2rtc for a backchannel
+  (`backchannel=opus,pcma,pcmu`). A camera's main stream genuinely has one, so recording it worked. A
+  substream does not, and go2rtc answers the request with an extra audio track whose clock disagrees
+  with the recorded audio — the mp4 muxer then rejected the packets (`non monotonically increasing
+  dts to muxer in stream 1`) and ffmpeg died roughly every 36 seconds, leaving truncated, overlapping
+  segments averaging 24s instead of 60s.
+
+  The recorder now strips the backchannel parameter from its input URL for every role. A recorder is
+  a one-way capture and never needs one. Audio is preserved in the recordings.
+
+  Isolated on a live install by varying one thing at a time against the same stream: production
+  arguments reproduced the failure, the same arguments with the parameter removed ran clean for the
+  full test with audio intact. Camera-side audio codec was ruled out — AAC and G.711A fail
+  identically, and `pcm_alaw` cannot be muxed into mp4 at all.
+
 ## [5.8.1] - 2026-07-27
 
 ### Fixed
