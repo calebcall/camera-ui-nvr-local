@@ -42,9 +42,12 @@ func (m *RecorderManager) Reconcile() {
 	}
 
 	for _, entry := range m.entriesSnapshot() {
-		// Re-read the camera's CURRENT stored config — its mode may have
-		// changed since it was registered (the whole point of this pass).
+		// Re-read the camera's CURRENT config — mode, roles or roll windows
+		// may have changed since it was registered (the whole point of this
+		// pass).
+		changed := false
 		if entry.Storage != nil {
+			prev := entry.Config
 			cfg := readRecordingConfig(entry.Storage)
 			// Core owns mode/preBuffer/sources (core_settings.go); without
 			// this the pass would revert to plugin-storage-only values.
@@ -53,6 +56,11 @@ func (m *RecorderManager) Reconcile() {
 			}
 			m.updateConfig(entry.CameraID, cfg)
 			entry.Config = cfg
+			changed = recorderConfigChanged(prev, cfg)
+			if changed {
+				m.logf("recorder: reconcile: camera %s config changed (mode=%s roles=%v preRoll=%ds postRoll=%ds)",
+					entry.CameraID, cfg.Mode, cfg.Roles, cfg.PreRollS, cfg.PostRollS)
+			}
 		}
 
 		desired := entry.Config.Mode != RecordingModeOff
@@ -71,6 +79,14 @@ func (m *RecorderManager) Reconcile() {
 			// retention still ages out its footage.
 			m.stopActiveKeepRegistered(entry.CameraID)
 			m.logf("recorder: reconcile: stopped camera %s (mode now off)", entry.CameraID)
+		case desired && active && changed:
+			// Still recording, but with different settings — e.g. continuous
+			// to event, or a stream tier added. Both states are "on", so this
+			// used to match no branch at all and the running ffmpeg kept its
+			// original config until the plugin was restarted.
+			if err := m.startOrRestartRecorder(entry); err != nil {
+				m.warnf("recorder: reconcile: camera %s restart failed: %v", entry.CameraID, err)
+			}
 		}
 	}
 }
@@ -163,4 +179,25 @@ func (m *RecorderManager) StopReconcile() {
 
 	cancel()
 	<-done
+}
+
+// recorderConfigChanged reports whether anything the *running* recorder
+// depends on differs between two resolved configs.
+//
+// RetentionDays is deliberately excluded: it is applied by the retention
+// pass against already-written segments, so restarting ffmpeg for it would
+// churn every recorder for no behavioural gain.
+func recorderConfigChanged(prev, next RecordingConfig) bool {
+	if prev.Mode != next.Mode || prev.PreRollS != next.PreRollS || prev.PostRollS != next.PostRollS {
+		return true
+	}
+	if len(prev.Roles) != len(next.Roles) {
+		return true
+	}
+	for i := range prev.Roles {
+		if prev.Roles[i] != next.Roles[i] {
+			return true
+		}
+	}
+	return false
 }

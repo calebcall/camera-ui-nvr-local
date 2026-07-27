@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.8.1] - 2026-07-27
+
+### Fixed
+
+- **Recording settings edited in camera.ui now take effect without restarting the plugin.** The
+  reconcile pass re-read each camera's config correctly but only acted when the on/off state flipped:
+  `desired && !active` started a recorder, `!desired && active` stopped one. Changing `continuous` to
+  `event` leaves both true, so no branch ran and the recorder kept its original settings indefinitely.
+  Adding or removing a recorded stream tier had the same problem.
+
+  The pass now also restarts a running recorder when the resolved config changed in a way it depends
+  on — mode, roles, pre-roll or post-roll. A retention-only change still does not restart anything,
+  since retention is applied to already-written segments and churning ffmpeg for it would cost more
+  than it gains. An unchanged config is untouched, so there is no churn on the 60s tick.
+
+  Config changes picked up by the pass are now logged, which makes it visible whether an edit in
+  camera.ui reached the plugin at all.
+
 ## [5.8.0] - 2026-07-27
 
 ### Fixed

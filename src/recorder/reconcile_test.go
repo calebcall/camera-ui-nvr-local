@@ -184,3 +184,68 @@ func TestReconcile_KeepsCoreRecordingSettings(t *testing.T) {
 		t.Fatalf("reconcile dropped core's recorded streams: want %v, got %v", want, entry.Config.Roles)
 	}
 }
+
+// TestReconcile_RestartsOnModeChangeBetweenOnStates is the regression test
+// for a camera edited from continuous to event: both states are "recording",
+// so the old desired-vs-active check matched no branch and the running
+// recorder kept its original mode until the plugin restarted.
+func TestReconcile_RestartsOnModeChangeBetweenOnStates(t *testing.T) {
+	m, cam, factory := launchedManager(t, RecordingModeContinuous)
+
+	before := len(factory.allHandlesFor("cam-1"))
+
+	cam.storage.set(keyRecordingMode, string(RecordingModeEvents))
+	m.Reconcile()
+
+	after := factory.allHandlesFor("cam-1")
+	if len(after) <= before {
+		t.Fatalf("expected a new recorder built for the new mode, handles went %d -> %d", before, len(after))
+	}
+	if cfg, ok := factory.configFor("cam-1"); !ok || cfg.Mode != RecordingModeEvents {
+		t.Fatalf("expected the rebuilt recorder to use the new mode, got %+v", cfg)
+	}
+}
+
+// Adding a stream tier to an already-recording camera must take effect too.
+func TestReconcile_RestartsOnRolesChange(t *testing.T) {
+	m, cam, factory := launchedManager(t, RecordingModeContinuous)
+	cam.sourceRoles = []string{"high-resolution", "low-resolution"}
+
+	before := len(factory.allHandlesFor("cam-1"))
+
+	cam.storage.set(keyRoles, []string{"high-resolution", "low-resolution"})
+	m.Reconcile()
+
+	if after := len(factory.allHandlesFor("cam-1")); after <= before {
+		t.Fatalf("expected a new recorder for the new role set, handles went %d -> %d", before, after)
+	}
+}
+
+// Churning ffmpeg every 60s would be worse than the bug. An unchanged config
+// must leave the running recorder alone.
+func TestReconcile_NoRestartWhenConfigUnchanged(t *testing.T) {
+	m, _, factory := launchedManager(t, RecordingModeContinuous)
+
+	before := len(factory.allHandlesFor("cam-1"))
+	m.Reconcile()
+	m.Reconcile()
+
+	if after := len(factory.allHandlesFor("cam-1")); after != before {
+		t.Fatalf("expected no restart for an unchanged config, handles went %d -> %d", before, after)
+	}
+}
+
+// Retention is applied by a separate pass and does not affect the running
+// ffmpeg process, so it must not cost a restart.
+func TestReconcile_NoRestartForRetentionOnlyChange(t *testing.T) {
+	m, cam, factory := launchedManager(t, RecordingModeContinuous)
+
+	before := len(factory.allHandlesFor("cam-1"))
+
+	cam.storage.set(keyRetentionDays, 30)
+	m.Reconcile()
+
+	if after := len(factory.allHandlesFor("cam-1")); after != before {
+		t.Fatalf("retention change must not restart the recorder, handles went %d -> %d", before, after)
+	}
+}
