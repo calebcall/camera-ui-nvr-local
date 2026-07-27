@@ -46,6 +46,11 @@ func (m *RecorderManager) Reconcile() {
 		// changed since it was registered (the whole point of this pass).
 		if entry.Storage != nil {
 			cfg := readRecordingConfig(entry.Storage)
+			// Core owns mode/preBuffer/sources (core_settings.go); without
+			// this the pass would revert to plugin-storage-only values.
+			if entry.CoreSettings != nil {
+				cfg = applyCoreRecordingSettings(cfg, entry.CoreSettings())
+			}
 			m.updateConfig(entry.CameraID, cfg)
 			entry.Config = cfg
 		}

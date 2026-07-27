@@ -1200,6 +1200,14 @@ func (c sdkManagedCamera) Storage() recorder.CameraStorage {
 	return c.dev.Storage()
 }
 
+// CoreRecordingSettings returns the recording settings camera.ui core keeps
+// on the camera record — the values its own settings UI edits. Empty on a
+// core too old to send them, which recorder.applyCoreRecordingSettings
+// treats as "keep the plugin's stored config".
+func (c sdkManagedCamera) CoreRecordingSettings() sdk.CameraRecordingSettings {
+	return c.dev.RecordingSettings()
+}
+
 // StreamURL resolves the RTSP/go2rtc URL for one of this camera's configured
 // stream sources by role (e.g. sdk.CameraRoleHighRes, "high-resolution" —
 // see recorder/manager.go's defaultRoles). *sdk.CameraDevice has no public

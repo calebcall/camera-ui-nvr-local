@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [Unreleased]
+
+### Fixed
+
+- **The camera's "Recorded streams" setting now actually controls what gets recorded.** camera.ui core
+  took ownership of recording settings in its `recording settings move from NVR plugin storage to the
+  camera record` migration — the camera record carries `recordingSettings` (enabled / mode / preBuffer
+  / sources) and core's settings UI edits them. This plugin never read them, so it kept recording from
+  its own stored keys: a settings panel that looked authoritative while changing nothing. A camera
+  showing all three qualities selected — core's default — was recording only high-resolution.
+
+  The two had also drifted apart. Core spells the event mode `event` where this plugin spells it
+  `events`; core measures the pre-roll as `preBuffer` where this plugin calls it `preRollS` with a
+  different default; core lists tiers as `high`/`mid`/`low` where this plugin stores
+  `*-resolution`; and core defaults to recording all three tiers where this plugin defaulted to
+  high only. Core's `adhoc` mode has no automatic-recording equivalent here and now resolves to off
+  rather than being mistaken for continuous.
+
+  `postRoll` and `retentionDays` have no equivalent on the camera record and remain plugin settings.
+  When core sends no recording settings at all — an older core — the plugin's own stored values still
+  apply, so upgrading cannot silently stop a recorder.
+
+  Edits are picked up by the existing reconcile pass (within 60s), no plugin restart required.
+
 ## [5.7.1] - 2026-07-27
 
 ### Fixed

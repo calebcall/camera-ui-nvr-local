@@ -163,6 +163,9 @@ func (f *fakeManagedCamera) StreamURL(role string) (string, error) {
 // GetManagedCameraIds delegation, not recorder-start role resolution (see
 // recorder/manager_orch_test.go for that).
 func (f *fakeManagedCamera) SourceRoles() []string { return nil }
+func (f *fakeManagedCamera) CoreRecordingSettings() sdk.CameraRecordingSettings {
+	return sdk.CameraRecordingSettings{}
+}
 
 func TestGetManagedCameraIds_DelegatesToRecorderManager(t *testing.T) {
 	p := newTestPlugin(t)

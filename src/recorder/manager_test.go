@@ -65,6 +65,11 @@ type fakeCamera struct {
 	// actual value (most of them) don't need to set it themselves.
 	streamURL func(role string) (string, error)
 
+	// coreSettings backs CoreRecordingSettings below. Left zero by
+	// newFakeCamera so pre-existing tests keep exercising the "core sent
+	// nothing: keep the plugin's stored config" path.
+	coreSettings sdk.CameraRecordingSettings
+
 	// sourceRoles backs SourceRoles below. Left nil by newFakeCamera — a
 	// camera reporting no sources at all — so every pre-existing test
 	// (which doesn't set this) keeps exercising the "no sources: keep
@@ -81,6 +86,10 @@ func (f *fakeCamera) StreamURL(role string) (string, error) {
 	return f.streamURL(role)
 }
 func (f *fakeCamera) SourceRoles() []string { return f.sourceRoles }
+
+// coreSettings is the camera record's recording config core would send; the
+// zero value means "core sent none", which is what most tests want.
+func (f *fakeCamera) CoreRecordingSettings() sdk.CameraRecordingSettings { return f.coreSettings }
 
 func newFakeCamera(id, name string, mode RecordingMode) *fakeCamera {
 	storage := newFakeCameraStorage()
