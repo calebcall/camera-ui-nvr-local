@@ -73,6 +73,10 @@ type Describer struct {
 	client completer
 	log    *sdk.Logger
 
+	// wait paces frame-sampling retries; nil means the real clock. Injected
+	// only by tests, so they exercise the schedule without spending it.
+	wait waitFunc
+
 	// queue hands events to the single worker; wg tracks that worker so Close
 	// can wait for the in-flight event to land before the database goes away.
 	queue chan store.DetectionEvent
@@ -259,7 +263,10 @@ func (d *Describer) describe(event store.DetectionEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	frames, err := d.frames.SampleFrames(ctx, event.CameraID, event.StartTime, event.EndTime, cfg.FrameCount)
+	// Retried while empty: the segment covering an event is often still being
+	// written when the event ends, and is not in the index until it closes
+	// (frame_retry.go).
+	frames, err := d.sampleFramesWithRetry(ctx, event.CameraID, event.StartTime, event.EndTime, cfg.FrameCount)
 	if err != nil {
 		d.logf("describe: sample frames for event %s: %v", event.ID, err)
 		return

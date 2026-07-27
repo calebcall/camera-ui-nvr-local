@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.8.3] - 2026-07-27
+
+### Fixed
+
+- **AI descriptions are no longer lost to a race with segment finalization.** An event is described
+  the moment it ends, but frame sampling resolves footage through the segment index, which only
+  contains *finalized* segments — the recorder deliberately skips the file it is still writing. With
+  60-second segments the footage covering an event is routinely not indexed until up to a minute
+  later, so the first sample came back empty and the event was abandoned with
+  `no frames available … nothing to describe`.
+
+  Whether an event got described was therefore luck: it depended on the event's start happening to
+  fall inside an already-closed segment. On one live install, 7 of 8 vehicle events over three hours
+  got no description; the one that did ran 43 seconds from well inside an earlier segment.
+
+  Sampling is now retried while it comes back empty, spanning a full segment length. Retries stop
+  early if the remaining deadline would not leave room for the model call — the single deadline
+  covering sampling and inference is deliberate, and waiting until it expires would only turn a
+  missing description into a slower one. Footage that never arrives, because it was never recorded or
+  has been pruned, still gives up and logs exactly as before, and a sampler *error* is not retried.
+
 ## [5.8.2] - 2026-07-27
 
 ### Fixed
