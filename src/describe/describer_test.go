@@ -322,6 +322,9 @@ func newTestDescriber(t *testing.T, g ConfigGetter, sampler *fakeSampler, w *fak
 	t.Helper()
 	d := NewDescriber(g, sampler, w, fakeNamer{"cam-1": "Sideyard"}, nil)
 	d.client = comp
+	// Frame sampling retries while empty (frame_retry.go); wait instantly so
+	// these tests exercise the behaviour without spending the schedule.
+	d.wait = func(context.Context, time.Duration) bool { return true }
 	return d
 }
 
@@ -483,6 +486,11 @@ func TestDescriber_DuplicateEvent_DescribesOnce(t *testing.T) {
 // frames is not an error from the sampler, so the worker has to notice it
 // itself — sending a request with no images would spend money to be told
 // nothing.
+//
+// It is sampled frameRetryAttempts times rather than once: an empty result
+// usually means the covering segment has not been finalized yet, so it is
+// retried before being abandoned (frame_retry.go). Footage that never arrives
+// still ends here, with no model call and nothing written.
 func TestDescriber_NoFramesAvailable_SkipsModelCall(t *testing.T) {
 	sampler := &fakeSampler{frames: nil}
 	w := newFakeWriter()
@@ -492,8 +500,8 @@ func TestDescriber_NoFramesAvailable_SkipsModelCall(t *testing.T) {
 	d.DescribeAsync(personEvent("ev-1"))
 	d.Close()
 
-	if got := sampler.callCount(); got != 1 {
-		t.Errorf("sampler called %d times, want 1", got)
+	if got := sampler.callCount(); got != frameRetryAttempts {
+		t.Errorf("sampler called %d times, want %d", got, frameRetryAttempts)
 	}
 	if got := comp.callCount(); got != 0 {
 		t.Errorf("completer called %d times, want 0 (no frames to send)", got)
