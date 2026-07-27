@@ -141,3 +141,43 @@ func TestApplyCoreRecordingSettings_IgnoresUnknownSources(t *testing.T) {
 		t.Fatalf("expected %v, got %v", want, got.Roles)
 	}
 }
+
+// Core's migration could not read this fork's key names, so every camera's
+// stored recordingSettings is core's untouched default — including cameras
+// deliberately set to off or events here, both of which the migration
+// collapsed to continuous. Adopting that wholesale would start recording on
+// cameras the operator had switched off, so an exactly-default payload is
+// treated as "never configured" and the plugin's own config stands.
+func TestApplyCoreRecordingSettings_UntouchedDefaultDoesNotOverrideLocal(t *testing.T) {
+	off := local()
+	off.Mode = RecordingModeOff
+
+	got := applyCoreRecordingSettings(off, coreDefaultRecordingSettings())
+
+	if got.Mode != RecordingModeOff {
+		t.Fatalf("a camera set to off must stay off, got %q", got.Mode)
+	}
+	if !reflect.DeepEqual(got.Roles, off.Roles) {
+		t.Fatalf("expected local roles %v, got %v", off.Roles, got.Roles)
+	}
+}
+
+// Once the operator actually edits the setting in core's UI, the payload
+// stops matching the default and core becomes authoritative.
+func TestApplyCoreRecordingSettings_EditedSettingsOverrideLocal(t *testing.T) {
+	off := local()
+	off.Mode = RecordingModeOff
+
+	edited := coreDefaultRecordingSettings()
+	edited.Sources = []sdk.RecordingSource{sdk.RecordingSourceHigh, sdk.RecordingSourceMid}
+
+	got := applyCoreRecordingSettings(off, edited)
+
+	if got.Mode != RecordingModeContinuous {
+		t.Fatalf("expected core's mode once it was edited, got %q", got.Mode)
+	}
+	want := []string{"high-resolution", "mid-resolution"}
+	if !reflect.DeepEqual(got.Roles, want) {
+		t.Fatalf("expected %v, got %v", want, got.Roles)
+	}
+}

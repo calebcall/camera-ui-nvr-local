@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   When core sends no recording settings at all — an older core — the plugin's own stored values still
   apply, so upgrading cannot silently stop a recorder.
 
+  Core's own migration could not read this fork's key names, so every camera arrived carrying core's
+  untouched defaults — and the one key whose name did match, `recordingMode`, has values core does not
+  recognise: both `off` and `events` collapsed to `continuous`. Adopting that as intent would have
+  started continuous recording on every camera deliberately switched off. A payload identical to
+  core's defaults is therefore read as "never configured" and the plugin's own config stands; core
+  takes over the moment anything in that panel is actually edited.
+
   Edits are picked up by the existing reconcile pass (within 60s), no plugin restart required.
 
 ## [5.7.1] - 2026-07-27
