@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
-## [Unreleased]
+## [5.8.0] - 2026-07-27
 
 ### Fixed
 
@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes over the moment anything in that panel is actually edited.
 
   Edits are picked up by the existing reconcile pass (within 60s), no plugin restart required.
+
+  Core's `adhoc` mode ("record only when started manually") resolves to off, since this plugin has no
+  manual-start path — see #28. It is deliberately not treated as continuous.
 
 ## [5.7.1] - 2026-07-27
 
