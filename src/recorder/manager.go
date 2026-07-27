@@ -103,6 +103,10 @@ type ManagedCamera interface {
 	Storage() CameraStorage
 	StreamURL(role string) (string, error)
 	SourceRoles() []string
+	// CoreRecordingSettings is the camera record's own recording config,
+	// which camera.ui core owns and edits (see core_settings.go). A zero
+	// value means core sent none and the plugin's stored keys stand.
+	CoreRecordingSettings() sdk.CameraRecordingSettings
 }
 
 // RecordingConfig is one camera's resolved recording settings.
@@ -162,6 +166,13 @@ type RecorderEntry struct {
 	// "continuous" in the UI) with no SDK config-changed hook to trigger it.
 	// May be nil for entries built by tests that don't supply storage.
 	Storage CameraStorage
+
+	// CoreSettings reads camera.ui core's own recording settings for this
+	// camera, captured for the same reason as Storage: the reconcile pass
+	// must re-resolve the full config later, and resolving from plugin
+	// storage alone would silently revert core's choice on the next tick.
+	// May be nil for entries built by tests that don't supply a camera.
+	CoreSettings func() sdk.CameraRecordingSettings
 }
 
 // RecorderHandle is the lifecycle surface RecorderManager needs from a live
@@ -923,10 +934,12 @@ func newRecorder(cam ManagedCamera) *RecorderEntry {
 	return &RecorderEntry{
 		CameraID:    cam.ID(),
 		Name:        cam.Name(),
-		Config:      readRecordingConfig(cam.Storage()),
+		Config:      resolveRecordingConfig(cam),
 		StreamURL:   cam.StreamURL,
 		SourceRoles: cam.SourceRoles(),
 		Storage:     cam.Storage(),
+
+		CoreSettings: cam.CoreRecordingSettings,
 	}
 }
 
@@ -1024,6 +1037,14 @@ func declareCameraSchemas(storage CameraStorage, schemas []sdk.JsonSchema) {
 		}
 		_ = storage.AddSchema(&schemas[i])
 	}
+}
+
+// resolveRecordingConfig reads the plugin's stored per-camera config and
+// then lets camera.ui core's own recording settings override the fields it
+// owns — see core_settings.go for why core is authoritative and what
+// happens when it sends nothing.
+func resolveRecordingConfig(cam ManagedCamera) RecordingConfig {
+	return applyCoreRecordingSettings(readRecordingConfig(cam.Storage()), cam.CoreRecordingSettings())
 }
 
 func readRecordingConfig(storage CameraStorage) RecordingConfig {

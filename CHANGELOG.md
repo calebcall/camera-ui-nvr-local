@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.8.0] - 2026-07-27
+
+### Fixed
+
+- **The camera's "Recorded streams" setting now actually controls what gets recorded.** camera.ui core
+  took ownership of recording settings in its `recording settings move from NVR plugin storage to the
+  camera record` migration — the camera record carries `recordingSettings` (enabled / mode / preBuffer
+  / sources) and core's settings UI edits them. This plugin never read them, so it kept recording from
+  its own stored keys: a settings panel that looked authoritative while changing nothing. A camera
+  showing all three qualities selected — core's default — was recording only high-resolution.
+
+  The two had also drifted apart. Core spells the event mode `event` where this plugin spells it
+  `events`; core measures the pre-roll as `preBuffer` where this plugin calls it `preRollS` with a
+  different default; core lists tiers as `high`/`mid`/`low` where this plugin stores
+  `*-resolution`; and core defaults to recording all three tiers where this plugin defaulted to
+  high only. Core's `adhoc` mode has no automatic-recording equivalent here and now resolves to off
+  rather than being mistaken for continuous.
+
+  `postRoll` and `retentionDays` have no equivalent on the camera record and remain plugin settings.
+  When core sends no recording settings at all — an older core — the plugin's own stored values still
+  apply, so upgrading cannot silently stop a recorder.
+
+  Core's own migration could not read this fork's key names, so every camera arrived carrying core's
+  untouched defaults — and the one key whose name did match, `recordingMode`, has values core does not
+  recognise: both `off` and `events` collapsed to `continuous`. Adopting that as intent would have
+  started continuous recording on every camera deliberately switched off. A payload identical to
+  core's defaults is therefore read as "never configured" and the plugin's own config stands; core
+  takes over the moment anything in that panel is actually edited.
+
+  Edits are picked up by the existing reconcile pass (within 60s), no plugin restart required.
+
+  Core's `adhoc` mode ("record only when started manually") resolves to off, since this plugin has no
+  manual-start path — see #28. It is deliberately not treated as continuous.
+
 ## [5.7.1] - 2026-07-27
 
 ### Fixed

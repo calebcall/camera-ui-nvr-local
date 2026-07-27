@@ -7,8 +7,11 @@
 package recorder
 
 import (
+	"reflect"
 	"testing"
 	"time"
+
+	sdk "github.com/cameraui/sdk/go"
 )
 
 // launchedManager wires a manager with one camera at the given mode, a fake
@@ -145,4 +148,39 @@ func TestStartReconcile_TickRunsReconcileThenStopsCleanly(t *testing.T) {
 
 	// Idempotent second stop is a no-op (must not block or panic).
 	m.StopReconcile()
+}
+
+// TestReconcile_KeepsCoreRecordingSettings guards the trap in wiring core's
+// settings in at registration only: the reconcile pass re-reads each
+// camera's config on a timer, and reading it from plugin storage alone would
+// quietly revert core's choice on the next tick.
+func TestReconcile_KeepsCoreRecordingSettings(t *testing.T) {
+	m, cam, _ := launchedManager(t, RecordingModeContinuous)
+
+	cam.coreSettings = sdk.CameraRecordingSettings{
+		Enabled: true,
+		Mode:    sdk.RecordingModeContinuous,
+		Sources: []sdk.RecordingSource{sdk.RecordingSourceLow},
+	}
+	cam.sourceRoles = []string{"high-resolution", "low-resolution"}
+	if err := m.Add(cam); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	m.Reconcile()
+
+	var entry *RecorderEntry
+	for _, e := range m.entriesSnapshot() {
+		if e.CameraID == "cam-1" {
+			entry = &e
+			break
+		}
+	}
+	if entry == nil {
+		t.Fatal("expected cam-1 to still be managed")
+	}
+	want := []string{"low-resolution"}
+	if !reflect.DeepEqual(entry.Config.Roles, want) {
+		t.Fatalf("reconcile dropped core's recorded streams: want %v, got %v", want, entry.Config.Roles)
+	}
 }
