@@ -38,7 +38,9 @@ var schemaSQL string
 //     and schema.sql's doc comment on the column.
 //   - 4: events.has_detections column + idx_events_camera_hasdet_ts (event
 //     list performance) — see migrateToV4 and schema.sql's doc comment.
-const schemaVersion = 4
+//   - 5: idx_events_ts, for the unfiltered recent-events sort — see
+//     migrateToV5 and schema.sql's doc comment on the index.
+const schemaVersion = 5
 
 // dbFileName is the SQLite database file created inside the directory
 // passed to Open.
@@ -240,6 +242,12 @@ func migrate(conn *sqlite3.Conn) error {
 			return fmt.Errorf("store: migrate to v4: %w", err)
 		}
 	}
+	if current < 5 {
+		if err := migrateToV5(conn); err != nil {
+			_ = conn.Exec("ROLLBACK")
+			return fmt.Errorf("store: migrate to v5: %w", err)
+		}
+	}
 
 	if err := conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		_ = conn.Exec("ROLLBACK")
@@ -332,6 +340,16 @@ func migrateToV4(conn *sqlite3.Conn) error {
 	return conn.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_events_camera_hasdet_ts
 			ON events (camera_id, has_detections, ts_ms)`)
+}
+
+// migrateToV5 adds idx_events_ts for databases created before it existed.
+//
+// Index-only, so unlike migrateToV4 there is nothing to backfill and no risk
+// of changing what any query returns — only how fast it is answered. CREATE
+// INDEX IF NOT EXISTS is idempotent on its own, so no hasColumn-style guard is
+// needed.
+func migrateToV5(conn *sqlite3.Conn) error {
+	return conn.Exec("CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts_ms DESC)")
 }
 
 // hasColumn reports whether table has a column named column, via PRAGMA
