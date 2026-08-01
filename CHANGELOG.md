@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.9.0] - 2026-07-31
+
+### Changed
+
+- **Requires camera.ui server 2.0.24 or newer** (was 2.0.15). Server 2.0.23 rebuilt the sensor
+  system, and this release is built against the matching SDK generation. This plugin declares no
+  sensors, so it is not directly affected by that rebuild, but the declared floor now matches what
+  the plugin is actually built and tested against. Hosts on 2.0.15–2.0.23 no longer satisfy the
+  constraint and should update the server first.
+
+  Note that `engines.camera.ui` tracks the **server** releases. The `camera.ui` package on npm is
+  the separate *service* component and versions independently — its numbering is unrelated to this
+  constraint.
+
+- **Dependencies refreshed across the board.** The camera.ui Go SDK moves from 1.1.16 to 1.2.6 and
+  the RPC library to 1.0.7; the build toolchain moves to CLI 0.0.74, npm SDK 1.2.3, TypeScript
+  7.0.2, and Go 1.26.5. The SDK jump spans a large upstream refactor — the sensor subsystem rewrite
+  and a substantially reduced camera device surface — but required no source changes here.
+
+  The SDK and CLI had been held back by version ranges that could not reach their current releases:
+  both were pinned to `~0.0.x` while the packages had moved to `1.2.x` and `0.0.7x`, so routine
+  update runs silently kept them behind.
+
+- **A camera that is removed and re-added keeps its stored settings.** Previously the plugin's
+  per-camera storage was destroyed on release; the SDK now retains schemas and persisted values and
+  only re-registers the handler, so toggling a camera off and back on no longer resets it.
+
+### Fixed
+
+- **Built bundles now declare the plugin protocol level they were built against.** The server
+  compares this stamp with its own supported range and refuses to start plugins outside it. The
+  previous CLI emitted no stamp at all, leaving bundles at risk of being rejected by a server that
+  expects one.
+
+### Security
+
+- **Three standard-library advisories reachable from this plugin are closed** by moving to Go
+  1.26.5 — two affecting the AI description HTTP client (`net/textproto`, TLS) and one in
+  `crypto/x509` reachable from the store. `govulncheck` now reports no called vulnerabilities.
+
+- **Dependency advisories cleared** in `klauspost/compress` (GO-2026-5841) and, in the build
+  toolchain, `brace-expansion` (GHSA-mh99-v99m-4gvg, a denial-of-service issue). One advisory
+  remains open in `golang.org/x/crypto` (GO-2026-5932) with no published fix; it is not reachable
+  from any code path in this plugin.
+
 ## [5.8.3] - 2026-07-27
 
 ### Fixed
