@@ -106,8 +106,8 @@ func (s *EventStore) Upsert(events []DetectionEvent) error {
 	defer s.db.Unlock()
 
 	stmt, _, err := s.db.Conn().Prepare(`
-		INSERT INTO events (id, camera_id, ts_ms, end_ms, types, label, confidence, box, has_recording, raw)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO events (id, camera_id, ts_ms, end_ms, types, label, confidence, box, has_recording, raw, has_detections)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			camera_id = excluded.camera_id,
 			ts_ms = excluded.ts_ms,
@@ -117,7 +117,8 @@ func (s *EventStore) Upsert(events []DetectionEvent) error {
 			confidence = excluded.confidence,
 			box = excluded.box,
 			has_recording = excluded.has_recording,
-			raw = excluded.raw`)
+			raw = excluded.raw,
+			has_detections = excluded.has_detections`)
 	if err != nil {
 		return fmt.Errorf("store: prepare upsert event: %w", err)
 	}
@@ -185,6 +186,13 @@ func upsertOneEvent(stmt *sqlite3.Stmt, ev DetectionEvent) error {
 		return err
 	}
 	if err := stmt.BindText(10, string(raw)); err != nil {
+		return err
+	}
+	// Precomputed here so Query can answer the `hasDetections` filter in SQL
+	// against an index instead of decoding every row (see schema.sql). This
+	// is the only writer of the column, which is what keeps it in lockstep
+	// with the EventHasDetections predicate the filter used to call directly.
+	if err := stmt.BindBool(11, EventHasDetections(ev)); err != nil {
 		return err
 	}
 
@@ -527,10 +535,13 @@ func (s *EventStore) deletedEventsOlderThan(cameraID string, cutoffMs int64) ([]
 // reporting whether more rows exist past the returned page.
 //
 // Filters split two ways:
-//   - CameraID/StartMs/EndMs/Before/MinConfidence/HasRecording run in SQL
-//     against the indexed flat columns (camera_id, ts_ms, confidence,
-//     has_recording), because they map directly onto a single column.
-//   - Types/Triggers/TriggerLabels/Attributes/Search/HasDetections/State
+//   - CameraID/StartMs/EndMs/Before/MinConfidence/HasRecording/HasDetections
+//     run in SQL against the indexed flat columns (camera_id, ts_ms,
+//     confidence, has_recording, has_detections), because they map directly
+//     onto a single column. HasDetections earns its column by being
+//     precomputed at write time from the same EventHasDetections predicate
+//     the Go filter used to call — see schema.sql.
+//   - Types/Triggers/TriggerLabels/Attributes/Search/State
 //     don't: State has no dedicated column at all (see the package doc
 //     below), and the others need the event's nested trigger/segment
 //     structure that only the decoded raw JSON has. When any of these are
@@ -658,6 +669,15 @@ func buildEventsQuery(cameraIDs []string, opts GetEventsOptions) (string, []any,
 		clauses = append(clauses, "has_recording = ?")
 		args = append(args, *opts.HasRecording)
 	}
+	// Only `true` constrains anything. hasDetections=false has always meant
+	// "don't filter" rather than "only events without detections" — see
+	// matchesFilters, which likewise only ever rejected when the value was
+	// true — and the frontend relies on that (it sends false to mean "show
+	// everything"). Treating false as a real predicate here would silently
+	// hide every object-detection event.
+	if opts.HasDetections != nil && *opts.HasDetections {
+		clauses = append(clauses, "has_detections = 1")
+	}
 
 	query := "SELECT raw, description FROM events"
 	if len(clauses) > 0 {
@@ -682,12 +702,15 @@ func buildEventsQuery(cameraIDs []string, opts GetEventsOptions) (string, []any,
 // express against the flat SQL columns and must instead apply in Go after
 // decoding each row's raw JSON.
 func needsPostFilter(opts GetEventsOptions) bool {
+	// HasDetections is deliberately absent: it is answered in SQL against the
+	// indexed has_detections column (see buildEventsQuery). It used to be
+	// listed here, which forced the whole-table decode path for the single
+	// most common query the frontend makes.
 	return len(opts.Types) > 0 ||
 		len(opts.Triggers) > 0 ||
 		len(opts.TriggerLabels) > 0 ||
 		len(opts.Attributes) > 0 ||
 		opts.Search != "" ||
-		opts.HasDetections != nil ||
 		opts.State != ""
 }
 
