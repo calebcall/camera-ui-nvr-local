@@ -66,11 +66,29 @@ CREATE TABLE IF NOT EXISTS events (
   -- TABLE migration for pre-existing v2 databases (see db.go's
   -- migrateToV3); nullable with no default, since NULL is exactly the state
   -- every pre-existing event is genuinely in.
-  description TEXT
+  description TEXT,
+  -- has_detections: EventHasDetections(ev) precomputed at write time, so the
+  -- getEvents `hasDetections` filter can be answered in SQL instead of by
+  -- decoding every row's raw JSON in Go. That filter is on the hot path — the
+  -- frontend sends {"hasDetections":true,"limit":16} on every event-list load
+  -- — and routing it through the Go post-filter forced buildEventsQuery to
+  -- drop the SQL LIMIT and read the whole table to return a page of 16 (652 MB
+  -- and ~9s on a real 12k-event install). Kept in lockstep with the Go
+  -- predicate by upsertOneEvent, its only writer. Added retroactively via an
+  -- ALTER TABLE migration for pre-existing v3 databases (see db.go's
+  -- migrateToV4), which backfills from the existing `types` column.
+  has_detections INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_camera_ts
   ON events (camera_id, ts_ms);
+
+-- Serves the hot event-list query: a set of camera ids, filtered to events
+-- with detections, newest first. Leading camera_id matches the
+-- `camera_id IN (...)` clause, has_detections then narrows, and ts_ms orders
+-- within each group.
+CREATE INDEX IF NOT EXISTS idx_events_camera_hasdet_ts
+  ON events (camera_id, has_detections, ts_ms);
 
 CREATE TABLE IF NOT EXISTS system_events (
   id TEXT PRIMARY KEY,

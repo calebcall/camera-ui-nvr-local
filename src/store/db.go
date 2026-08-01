@@ -36,7 +36,9 @@ var schemaSQL string
 //     schema.sql's segments table doc comment.
 //   - 3: events.description column (AI event descriptions) — see migrateToV3
 //     and schema.sql's doc comment on the column.
-const schemaVersion = 3
+//   - 4: events.has_detections column + idx_events_camera_hasdet_ts (event
+//     list performance) — see migrateToV4 and schema.sql's doc comment.
+const schemaVersion = 4
 
 // dbFileName is the SQLite database file created inside the directory
 // passed to Open.
@@ -232,6 +234,12 @@ func migrate(conn *sqlite3.Conn) error {
 			return fmt.Errorf("store: migrate to v3: %w", err)
 		}
 	}
+	if current < 4 {
+		if err := migrateToV4(conn); err != nil {
+			_ = conn.Exec("ROLLBACK")
+			return fmt.Errorf("store: migrate to v4: %w", err)
+		}
+	}
 
 	if err := conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		_ = conn.Exec("ROLLBACK")
@@ -283,6 +291,47 @@ func migrateToV3(conn *sqlite3.Conn) error {
 		return nil
 	}
 	return conn.Exec("ALTER TABLE events ADD COLUMN description TEXT")
+}
+
+// migrateToV4 adds the events.has_detections column and the index serving the
+// hot event-list query (see schema.sql's doc comment on the column), for
+// databases created before it existed.
+//
+// Unlike migrateToV3's nullable description, this column MUST be backfilled
+// rather than left at its DEFAULT 0: getEvents' `hasDetections` filter now
+// trusts the column, so every pre-existing event would otherwise read as
+// "no detections" and vanish from the event list the moment this ships.
+//
+// The backfill is pure SQL over the small, already-populated `types` column —
+// deliberately not over `raw`, which is the multi-hundred-megabyte one. It
+// mirrors EventHasDetections (events.go): true when any type is neither
+// "motion" nor "audio". json_each is SQLite's JSON1 table-valued function;
+// `types` has been written as a JSON array by upsertOneEvent since v1. A row
+// whose types is NULL or an empty array yields no json_each rows and so
+// correctly stays 0, matching the Go predicate's behaviour on an event with
+// no types at all.
+func migrateToV4(conn *sqlite3.Conn) error {
+	has, err := hasColumn(conn, "events", "has_detections")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if err := conn.Exec("ALTER TABLE events ADD COLUMN has_detections INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+		if err := conn.Exec(`
+			UPDATE events SET has_detections = (
+				SELECT EXISTS(
+					SELECT 1 FROM json_each(events.types)
+					WHERE json_each.value NOT IN ('motion', 'audio')
+				)
+			)`); err != nil {
+			return err
+		}
+	}
+	return conn.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_events_camera_hasdet_ts
+			ON events (camera_id, has_detections, ts_ms)`)
 }
 
 // hasColumn reports whether table has a column named column, via PRAGMA
