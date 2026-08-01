@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/cameraui/rpc/go v1.0.7
-	github.com/cameraui/sdk/go v1.2.4
+	github.com/cameraui/sdk/go v1.2.6
 	github.com/google/uuid v1.6.0
 	github.com/ncruces/go-sqlite3 v0.35.2
 	github.com/vmihailenco/msgpack/v5 v5.4.1
