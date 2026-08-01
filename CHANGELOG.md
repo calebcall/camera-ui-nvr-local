@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.10.0] - 2026-08-01
+
+### Fixed
+
+- **Recent events load in milliseconds instead of seconds, and stop failing outright.** On a real
+  12,700-event install the event list took ~9 seconds per request and frequently didn't load at
+  all — the browser dropped every socket namespace at once (`/server`, `/camera.ui`,
+  `/notifications`, `/plugins`) because the request stalled the server long enough to miss its
+  pings.
+
+  Three compounding causes, all fixed here.
+
+  **The `hasDetections` filter read the entire events table to return 16 rows.** It was answered in
+  Go rather than SQL, and the query builder drops its `LIMIT` whenever a filter needs the decoded
+  event — so every event-list load fetched and JSON-decoded all 654 MB of stored events, then threw
+  almost all of it away. It is now a precomputed, indexed column. Measured on that install: **2101 ms
+  and 654.3 MB read, down to 15 ms and 1.98 MB.** The waste was stark — 96% of its events are
+  audio- or motion-only (8,163 audio, 4,053 motion, 498 with actual detections) and were being
+  decoded on every single request only to be discarded.
+
+  **Event thumbnails were stored inside the event record itself.** The camera.ui SDK attaches JPEGs
+  at four levels — event, segment, detection and attribute — and all of them were being written into
+  the same field the event list reads, encoded as text. They accounted for **99.1%** of the database.
+  They now live in their own table, fetched only when something actually asks for a thumbnail:
+  **655.3 MB of event records becomes 8.8 MB**, average 51.4 KB → 0.69 KB per event. Thumbnails
+  themselves are unchanged and still served exactly as before.
+
+  **Browsing all cameras at once had no usable index**, so it sorted the whole table on every
+  request. Adding one took that path from **~1.8 s to 6 ms.**
+
+  Databases upgrade in place — schema migrations run automatically on first start, and events
+  recorded by earlier versions keep their thumbnails and continue to display normally. Nothing needs
+  to be cleared or rebuilt.
+
 ## [5.9.1] - 2026-08-01
 
 ### Fixed
