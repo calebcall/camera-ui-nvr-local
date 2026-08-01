@@ -124,14 +124,225 @@ func (s *EventStore) Upsert(events []DetectionEvent) error {
 	}
 	defer stmt.Close()
 
+	// Thumbnails go to their own table so they stay out of events.raw, which
+	// every list query reads. Written after the event row, so the foreign key
+	// declared on event_thumbnails.event_id always has its parent.
+	thumbStmt, _, err := s.db.Conn().Prepare(`
+		INSERT INTO event_thumbnails (event_id, payload) VALUES (?, ?)
+		ON CONFLICT(event_id) DO UPDATE SET payload = excluded.payload`)
+	if err != nil {
+		return fmt.Errorf("store: prepare upsert event thumbnails: %w", err)
+	}
+	defer thumbStmt.Close()
+
 	for _, ev := range events {
-		if err := upsertOneEvent(stmt, ev); err != nil {
+		stripped, thumbs := splitThumbnails(ev)
+
+		if err := upsertOneEvent(stmt, stripped); err != nil {
 			return err
 		}
 		if err := stmt.Reset(); err != nil {
 			return fmt.Errorf("store: reset upsert event statement: %w", err)
 		}
+
+		if thumbs.empty() {
+			continue
+		}
+		if err := upsertEventThumbnails(thumbStmt, stripped.ID, thumbs); err != nil {
+			return err
+		}
+		if err := thumbStmt.Reset(); err != nil {
+			return fmt.Errorf("store: reset upsert thumbnails statement: %w", err)
+		}
 	}
+	return nil
+}
+
+// upsertEventThumbnails writes one event's extracted thumbnails.
+func upsertEventThumbnails(stmt *sqlite3.Stmt, eventID string, thumbs eventThumbnails) error {
+	payload, err := json.Marshal(thumbs)
+	if err != nil {
+		return fmt.Errorf("store: marshal event %s thumbnails: %w", eventID, err)
+	}
+	if err := stmt.BindText(1, eventID); err != nil {
+		return err
+	}
+	if err := stmt.BindText(2, string(payload)); err != nil {
+		return err
+	}
+	if err := stmt.Exec(); err != nil {
+		return fmt.Errorf("store: upsert event %s thumbnails: %w", eventID, err)
+	}
+	return nil
+}
+
+// eventThumbnails is the JPEG bytes an event carries inline, lifted out of
+// the event so they never land in events.raw (see schema.sql's
+// event_thumbnails doc comment for why that matters).
+//
+// Positional by design: Segments[i] lines up with the event's Segments[i],
+// and likewise for detections and attributes within a segment. The wire's
+// EventThumbnails shape (src/wire.go) cannot be used here because it keys
+// detections by label, which is not unique within a segment — round-tripping
+// through it would silently merge two detections that share a label.
+type eventThumbnails struct {
+	Event    []byte              `json:"event,omitempty"`
+	Segments []segmentThumbnails `json:"segments,omitempty"`
+}
+
+type segmentThumbnails struct {
+	Scene      []byte   `json:"scene,omitempty"`
+	Detections [][]byte `json:"detections,omitempty"`
+	Attributes [][]byte `json:"attributes,omitempty"`
+}
+
+// empty reports whether there is nothing worth storing, so events with no
+// inline thumbnails (the common case for motion- and audio-only events, which
+// were 96% of one real install) don't each get a redundant row.
+func (t eventThumbnails) empty() bool {
+	if len(t.Event) > 0 {
+		return false
+	}
+	for _, s := range t.Segments {
+		if len(s.Scene) > 0 {
+			return false
+		}
+		for _, d := range s.Detections {
+			if len(d) > 0 {
+				return false
+			}
+		}
+		for _, a := range s.Attributes {
+			if len(a) > 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// splitThumbnails returns a copy of ev with every inline thumbnail removed,
+// alongside the thumbnails it removed.
+//
+// It deliberately copies rather than clearing in place. The ingest path reuses
+// the very same event for the push notification immediately after calling
+// Upsert (events_ingest.go), so stripping in place would blank the
+// notification's thumbnail as a side effect of persisting — the kind of
+// aliasing bug that only shows up on a real device.
+func splitThumbnails(ev DetectionEvent) (DetectionEvent, eventThumbnails) {
+	var thumbs eventThumbnails
+	thumbs.Event = ev.Thumbnail
+	ev.Thumbnail = nil
+
+	if len(ev.Segments) == 0 {
+		return ev, thumbs
+	}
+
+	segments := make([]sdk.EventSegment, len(ev.Segments))
+	copy(segments, ev.Segments)
+	thumbs.Segments = make([]segmentThumbnails, len(segments))
+
+	for i := range segments {
+		thumbs.Segments[i].Scene = segments[i].Thumbnail
+		segments[i].Thumbnail = nil
+
+		if len(segments[i].Detections) > 0 {
+			dets := make([]sdk.EventDetection, len(segments[i].Detections))
+			copy(dets, segments[i].Detections)
+			thumbs.Segments[i].Detections = make([][]byte, len(dets))
+			for j := range dets {
+				thumbs.Segments[i].Detections[j] = dets[j].Thumbnail
+				dets[j].Thumbnail = nil
+			}
+			segments[i].Detections = dets
+		}
+
+		if len(segments[i].Attributes) > 0 {
+			attrs := make([]sdk.EventAttribute, len(segments[i].Attributes))
+			copy(attrs, segments[i].Attributes)
+			thumbs.Segments[i].Attributes = make([][]byte, len(attrs))
+			for j := range attrs {
+				thumbs.Segments[i].Attributes[j] = attrs[j].Thumbnail
+				attrs[j].Thumbnail = nil
+			}
+			segments[i].Attributes = attrs
+		}
+	}
+	ev.Segments = segments
+	return ev, thumbs
+}
+
+// attachTo puts the thumbnails back onto ev, matching positionally.
+//
+// Length mismatches are tolerated rather than treated as errors: the stored
+// payload could predate an event being updated with a different number of
+// segments, and a missing thumbnail must never fail the RPC that was only
+// trying to show a picture.
+func (t eventThumbnails) attachTo(ev *DetectionEvent) {
+	if len(t.Event) > 0 {
+		ev.Thumbnail = t.Event
+	}
+	for i := range ev.Segments {
+		if i >= len(t.Segments) {
+			break
+		}
+		st := t.Segments[i]
+		if len(st.Scene) > 0 {
+			ev.Segments[i].Thumbnail = st.Scene
+		}
+		for j := range ev.Segments[i].Detections {
+			if j < len(st.Detections) && len(st.Detections[j]) > 0 {
+				ev.Segments[i].Detections[j].Thumbnail = st.Detections[j]
+			}
+		}
+		for j := range ev.Segments[i].Attributes {
+			if j < len(st.Attributes) && len(st.Attributes[j]) > 0 {
+				ev.Segments[i].Attributes[j].Thumbnail = st.Attributes[j]
+			}
+		}
+	}
+}
+
+// AttachThumbnails restores ev's inline thumbnails from the event_thumbnails
+// table, for the one caller that actually wants them (GetEventThumbnails).
+// Query deliberately does not call this — not paying for thumbnail bytes on
+// the list path is the entire point of storing them separately.
+//
+// An event with no stored row is left exactly as-is, which is what makes this
+// safe without a backfill: rows written by an older version still carry their
+// thumbnails inline in raw, so they are already populated by the time Query
+// decodes them and there is nothing to restore.
+func (s *EventStore) AttachThumbnails(ev *DetectionEvent) error {
+	if ev == nil || ev.ID == "" {
+		return nil
+	}
+
+	s.db.Lock()
+	defer s.db.Unlock()
+
+	stmt, _, err := s.db.Conn().Prepare(`SELECT payload FROM event_thumbnails WHERE event_id = ?`)
+	if err != nil {
+		return fmt.Errorf("store: prepare load thumbnails: %w", err)
+	}
+	defer stmt.Close()
+	if err := stmt.BindText(1, ev.ID); err != nil {
+		return err
+	}
+	if !stmt.Step() {
+		if err := stmt.Err(); err != nil {
+			return fmt.Errorf("store: load thumbnails: %w", err)
+		}
+		return nil
+	}
+
+	var thumbs eventThumbnails
+	if err := json.Unmarshal([]byte(stmt.ColumnText(0)), &thumbs); err != nil {
+		// Same reasoning as attachDescription: an unusable thumbnail payload
+		// must never fail a request that could otherwise still serve the
+		// event's other images.
+		return nil
+	}
+	thumbs.attachTo(ev)
 	return nil
 }
 
