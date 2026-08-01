@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.9.1] - 2026-08-01
+
+### Fixed
+
+- **Building the plugin no longer rewrites its own `package.json`.** `cui bundle` was overwriting
+  the repository's `optionalDependencies` with the current release version on every run, pinning
+  platform packages that are not published until release time — which breaks `npm ci` for anyone
+  building from a working tree. Fixed upstream in `@camera.ui/cli` 0.0.75, which leaves the repo
+  manifest untouched and derives the bundle's own `optionalDependencies` as before.
+
+  Build-time only. The produced bundle is unchanged: same eight platform packages, same protocol
+  level stamp, same engine constraints.
+
 ## [5.9.0] - 2026-07-31
 
 ### Changed
