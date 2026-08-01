@@ -34,7 +34,7 @@
     "url": "https://github.com/calebcall/camera-ui-nvr-local/issues"
   },
   "engines": {
-    "camera.ui": ">=2.0.15",
+    "camera.ui": ">=2.0.24",
     "node": ">=22.0.0"
   },
   "homepage": "https://github.com/calebcall/camera-ui-nvr-local/tree/main#readme",
