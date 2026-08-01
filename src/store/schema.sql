@@ -101,6 +101,30 @@ CREATE INDEX IF NOT EXISTS idx_events_camera_hasdet_ts
 CREATE INDEX IF NOT EXISTS idx_events_ts
   ON events (ts_ms DESC);
 
+-- event_thumbnails holds the JPEG bytes an sdk.DetectionEvent carries inline,
+-- lifted out of events.raw so the event-list queries never pay for them.
+--
+-- The SDK inlines thumbnails at four levels (event, segment, detection,
+-- attribute) and encoding/json renders []byte as base64, so storing the event
+-- verbatim put all of it in the one column every list query reads. On a real
+-- install that was 99.1% of a 652 MB events table — the actual event data was
+-- ~6 MB. Splitting them out leaves raw small and keeps the bytes available to
+-- GetEventThumbnails, which is the only reader that actually wants them.
+--
+-- payload is the thumbnails positionally mirroring the event's structure (see
+-- eventThumbnails in events.go), not the wire's EventThumbnails shape: it has
+-- to survive a round trip back onto a decoded event, and the wire shape is
+-- lossy for that (it keys detections by label, which is not unique within a
+-- segment).
+--
+-- ON DELETE CASCADE is what keeps retention honest: DeleteOlderThan only
+-- deletes from events, and PRAGMA foreign_keys=ON (set in Open) then drops
+-- the matching thumbnails rather than orphaning them forever.
+CREATE TABLE IF NOT EXISTS event_thumbnails (
+  event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS system_events (
   id TEXT PRIMARY KEY,
   camera_id TEXT,

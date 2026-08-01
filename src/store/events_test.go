@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"testing"
 
 	sdk "github.com/cameraui/sdk/go"
@@ -381,8 +382,18 @@ func TestEventStore_Upsert_RoundTripsFullEvent(t *testing.T) {
 	if got.ID != original.ID || got.EndTime != original.EndTime || len(got.Segments) != 1 {
 		t.Fatalf("round-tripped event doesn't match: got %+v, want %+v", got, original)
 	}
-	if len(got.Thumbnail) != len(original.Thumbnail) {
-		t.Fatalf("expected thumbnail bytes to round-trip, got %v", got.Thumbnail)
+	// Query no longer carries thumbnail bytes: they live in event_thumbnails
+	// so the event-list path never pays for them (they were 99.1% of a real
+	// install's events table). They still round-trip in full, but only for the
+	// caller that asks — see AttachThumbnails and events_thumbnails_test.go.
+	if len(got.Thumbnail) != 0 {
+		t.Fatalf("expected Query to omit thumbnail bytes, got %v", got.Thumbnail)
+	}
+	if err := events.AttachThumbnails(&got); err != nil {
+		t.Fatalf("AttachThumbnails: %v", err)
+	}
+	if !bytes.Equal(got.Thumbnail, original.Thumbnail) {
+		t.Fatalf("expected thumbnail bytes to round-trip via AttachThumbnails, got %v", got.Thumbnail)
 	}
 	if len(got.Segments[0].Detections) != 1 || got.Segments[0].Detections[0].Label != "person" {
 		t.Fatalf("expected nested segment detections to round-trip, got %+v", got.Segments[0])

@@ -161,6 +161,14 @@ func (p *NVRPlugin) GetEventThumbnails(cameraID string, startMs int64, eventID s
 	}
 	for _, ev := range result.Events {
 		if ev.ID == eventID {
+			// Query deliberately leaves thumbnail bytes behind — they live in
+			// their own table so the event-list path never pays for them (see
+			// store/schema.sql). This is the one caller that wants them, so
+			// it asks for them explicitly. A legacy row that still has them
+			// inline in raw is left as-is and already populated.
+			if err := p.events.AttachThumbnails(&ev); err != nil && p.Logger != nil {
+				p.Logger.Debug(fmt.Sprintf("nvr-local: attach thumbnails for %s failed: %v", eventID, err))
+			}
 			out := thumbnailsFromEvent(ev)
 			if len(out.Event) == 0 {
 				out.Event = p.loadGeneratedThumbnail(eventID)

@@ -40,7 +40,9 @@ var schemaSQL string
 //     list performance) — see migrateToV4 and schema.sql's doc comment.
 //   - 5: idx_events_ts, for the unfiltered recent-events sort — see
 //     migrateToV5 and schema.sql's doc comment on the index.
-const schemaVersion = 5
+//   - 6: event_thumbnails table, lifting inline JPEG bytes out of events.raw
+//     — see migrateToV6 and schema.sql's doc comment on the table.
+const schemaVersion = 6
 
 // dbFileName is the SQLite database file created inside the directory
 // passed to Open.
@@ -248,6 +250,12 @@ func migrate(conn *sqlite3.Conn) error {
 			return fmt.Errorf("store: migrate to v5: %w", err)
 		}
 	}
+	if current < 6 {
+		if err := migrateToV6(conn); err != nil {
+			_ = conn.Exec("ROLLBACK")
+			return fmt.Errorf("store: migrate to v6: %w", err)
+		}
+	}
 
 	if err := conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		_ = conn.Exec("ROLLBACK")
@@ -350,6 +358,23 @@ func migrateToV4(conn *sqlite3.Conn) error {
 // needed.
 func migrateToV5(conn *sqlite3.Conn) error {
 	return conn.Exec("CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts_ms DESC)")
+}
+
+// migrateToV6 creates the event_thumbnails table for databases that predate
+// it (see schema.sql's doc comment on the table).
+//
+// Deliberately does NOT backfill. Rows written by an earlier version still
+// carry their thumbnails inline in raw, and AttachThumbnails leaves an event
+// with no stored row untouched — so those keep serving thumbnails exactly as
+// before and simply age out through retention. Rewriting them in place would
+// mean a batched, resumable pass over a multi-hundred-megabyte column for no
+// correctness benefit, which is a far worse trade than letting them expire.
+func migrateToV6(conn *sqlite3.Conn) error {
+	return conn.Exec(`
+		CREATE TABLE IF NOT EXISTS event_thumbnails (
+			event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+			payload TEXT NOT NULL
+		)`)
 }
 
 // hasColumn reports whether table has a column named column, via PRAGMA
