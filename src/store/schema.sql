@@ -90,6 +90,17 @@ CREATE INDEX IF NOT EXISTS idx_events_camera_ts
 CREATE INDEX IF NOT EXISTS idx_events_camera_hasdet_ts
   ON events (camera_id, has_detections, ts_ms);
 
+-- Serves the unfiltered "recent events across every camera" query
+-- (getEvents with no camera ids), which orders by ts_ms alone. Neither index
+-- above can: both lead with camera_id, which that query leaves unconstrained,
+-- so SQLite fell back to scanning every row and sorting it through a temp
+-- B-tree before LIMIT could apply — carrying the full raw payload through the
+-- sorter. On a 12,673-event / 652 MB install that was ~1.8s per call versus
+-- 6ms with this index, which itself costs 31ms to build and no measurable
+-- file size. DESC matches the query's ORDER BY direction.
+CREATE INDEX IF NOT EXISTS idx_events_ts
+  ON events (ts_ms DESC);
+
 CREATE TABLE IF NOT EXISTS system_events (
   id TEXT PRIMARY KEY,
   camera_id TEXT,
