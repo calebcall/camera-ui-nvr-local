@@ -683,3 +683,67 @@ func TestSweepSegments_SkipsAlreadyProcessedFilesOnSubsequentTicks(t *testing.T)
 		t.Fatalf("expected the final sweep to also index the last remaining file, got %d rows", got)
 	}
 }
+
+// TestSweepSegments_ResumesWhenTheMarkerFileWasSweptAway is the regression for
+// the events-mode disk leak.
+//
+// processedUpTo is a PATH, and in events mode sweepEventSpool deletes swept
+// files — so the marker's own file routinely disappears between ticks. The
+// resume used sort.SearchStrings(files, marker)+1 unconditionally; with the
+// marker gone the search lands on the next, unprocessed file and the +1 stepped
+// over it. That file was never indexed, so the janitor never learned it
+// existed, so it was never deleted: one permanently orphaned file per tick that
+// swept the marker. On a camera where nothing is ever promoted this orphans
+// essentially every segment — observed at 560 files on disk against 1 indexed.
+func TestSweepSegments_ResumesWhenTheMarkerFileWasSweptAway(t *testing.T) {
+	requireFFmpeg(t)
+
+	dir := t.TempDir()
+	genSegment := func(name string) {
+		path := filepath.Join(dir, name)
+		cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+			"-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=5",
+			"-c:v", "libx264", "-movflags", "+frag_keyframe+empty_moov", path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("generate %s: %v\n%s", name, err, out)
+		}
+	}
+
+	genSegment("2000.mp4")
+	genSegment("2001.mp4")
+	genSegment("2002.mp4")
+
+	segStore := newTestSegmentStore(t)
+	r := NewRecorder(RecorderConfig{CameraID: "cam1", DataDir: t.TempDir()}, segStore, ResolveFFmpeg(), nil)
+
+	indexed := func() map[string]bool {
+		segs, err := segStore.InRange("cam1", "high", 0, time.Now().UnixMilli()+int64(time.Hour/time.Millisecond))
+		if err != nil {
+			t.Fatalf("InRange: %v", err)
+		}
+		got := make(map[string]bool, len(segs))
+		for _, s := range segs {
+			got[filepath.Base(s.Path)] = true
+		}
+		return got
+	}
+
+	var processedUpTo string
+	r.sweepSegments(dir, "high", &processedUpTo, false) // indexes 2000, 2001
+	if want := filepath.Join(dir, "2001.mp4"); processedUpTo != want {
+		t.Fatalf("processedUpTo = %q, want %q", processedUpTo, want)
+	}
+
+	// What sweepEventSpool does to an unreferenced spool segment: the marker's
+	// own file is removed from disk.
+	if err := os.Remove(processedUpTo); err != nil {
+		t.Fatalf("remove marker file: %v", err)
+	}
+
+	genSegment("2003.mp4")
+	r.sweepSegments(dir, "high", &processedUpTo, false)
+
+	if got := indexed(); !got["2002.mp4"] {
+		t.Errorf("2002.mp4 was skipped because the marker file had been swept; indexed=%v", got)
+	}
+}
