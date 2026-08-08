@@ -523,6 +523,56 @@ func TestRunRetentionOnce_OrphanSweep_SkipsFilesUnderActiveRecorderOutputDir(t *
 	}
 }
 
+// TestRunRetentionOnce_OrphanSweep_ReclaimsOlderOrphansUnderActiveRecorder is
+// the other half of the events-mode leak fix.
+//
+// The sweep used to skip an active recorder's whole output directory, which is
+// exactly where orphans accumulate — so on a camera that is currently
+// recording, nothing was ever reclaimed. Measured on a live install: ~120 GB
+// across three events-mode cameras the sweep walked past on every pass.
+//
+// Only the newest file needs protecting: ffmpeg holds one segment open at a
+// time, and sweepSegments deliberately leaves that one unindexed until a newer
+// one appears. Anything older is fair game once it clears grace.
+func TestRunRetentionOnce_OrphanSweep_ReclaimsOlderOrphansUnderActiveRecorder(t *testing.T) {
+	recordingsDir := t.TempDir()
+	_, segStore, eventStore := openRetentionStores(t)
+
+	now := time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC).UnixMilli()
+
+	m := NewRecorderManager()
+	if err := m.Configure([]ManagedCamera{newRetentionCamera("cam1", 365)}); err != nil {
+		t.Fatal(err)
+	}
+	m.ConfigureRetention(segStore, eventStore, recordingsDir, nil)
+
+	activeDir := filepath.Join(recordingsDir, "recordings", "cam1")
+	m.ConfigureRecording(recordingsDir, 0, func(cfg RecorderConfig) RecorderHandle {
+		return fakeActiveDirHandle{dirs: []string{activeDir}}
+	})
+	if err := m.StartAll(); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+	defer m.StopAll()
+
+	stale := int64(30 * time.Minute / time.Millisecond)
+	// Epoch-style names, so the lexically greatest is genuinely the newest —
+	// the same ordering assumption sweepSegments makes.
+	orphan := writeOrphanFile(t, recordingsDir, "cam1", "1000.mp4", now-stale)
+	openSeg := writeOrphanFile(t, recordingsDir, "cam1", "2000.mp4", now-stale)
+
+	if err := m.RunRetentionOnce(now); err != nil {
+		t.Fatalf("RunRetentionOnce: %v", err)
+	}
+
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("an older unindexed file under an active recorder must be reclaimed, stat err=%v", err)
+	}
+	if _, err := os.Stat(openSeg); err != nil {
+		t.Errorf("the newest file may still be held open by the recorder and must survive, stat err=%v", err)
+	}
+}
+
 // fakeActiveDirHandle is a RecorderHandle that also reports a fixed set of
 // "currently active" output directories, simulating a live *recorder.
 // Recorder for TestRunRetentionOnce_OrphanSweep_SkipsFilesUnderActiveRecorderOutputDir

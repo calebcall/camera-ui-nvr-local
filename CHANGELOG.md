@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.13.0] - 2026-08-08
+
+Minor rather than patch: the orphan sweep now reclaims files it previously walked past, so an
+upgrade can free a substantial amount of disk on any camera recording in events mode.
+
+### Fixed
+
+- **Events-mode recording leaked footage that nothing tracked.** On a camera recording in events
+  mode, roughly one segment file per sweep was written to disk, never indexed, and then never
+  cleaned up — invisible in the timeline, invisible to playback, and not counted against your
+  storage quota. Measured on a live install: **~120 GB across three cameras**, one of which had 560
+  files on disk against a single indexed row.
+
+  The indexer resumes each pass from the path of the last file it indexed. In events mode the
+  janitor deletes swept files, so that marker's own file routinely disappears between passes — the
+  resume then landed on the next, unprocessed file and stepped straight over it. Skipped meant
+  unindexed, unindexed meant the janitor never learned the file existed, so it stayed on disk
+  forever. Continuous recording never deletes files mid-run, which is why only events-mode cameras
+  were affected.
+
+  The resume now checks whether the marker is still there before skipping past it.
+
+- **The orphan cleanup can now reclaim files from cameras that are currently recording.** It skipped
+  a running recorder's entire output directory — which is precisely where orphans collect — so on an
+  active camera it reclaimed nothing, ever. It now protects only the newest file in that directory:
+  the one ffmpeg can still hold open, and the one the indexer intentionally leaves alone until a
+  newer one appears. Everything older still has to be unindexed and past the grace period before it
+  is touched.
+
+  **Existing orphaned files are cleaned up automatically** on the next retention pass after
+  upgrading, and the amount reclaimed is logged.
+
 ## [5.12.0] - 2026-08-08
 
 Minor rather than patch: camera.ui's own recording settings now take effect where they previously

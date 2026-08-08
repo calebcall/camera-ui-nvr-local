@@ -561,7 +561,20 @@ func (r *Recorder) sweepSegments(outDir, role string, processedUpTo *string, fin
 
 	start := 0
 	if *processedUpTo != "" {
-		start = sort.SearchStrings(files, *processedUpTo) + 1
+		// SearchStrings gives the first file >= the marker, which is the marker
+		// itself only while it is still on disk. Skipping past it
+		// unconditionally is what leaked: in events mode sweepEventSpool
+		// DELETES swept files, so the marker's own file routinely vanishes
+		// between ticks, the search then lands on the next (unprocessed) file,
+		// and the +1 stepped straight over it. That file never got indexed, so
+		// the janitor never learned it existed, so it stayed on disk forever —
+		// one orphan per tick that swept the marker. Continuous mode never
+		// removes files mid-run, which is exactly why only events-mode cameras
+		// leaked.
+		start = sort.SearchStrings(files, *processedUpTo)
+		if start < len(files) && files[start] == *processedUpTo {
+			start++ // marker still present: resume after it
+		}
 	}
 
 	limit := len(files)

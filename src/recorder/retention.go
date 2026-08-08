@@ -738,9 +738,41 @@ func (gc *retentionGC) sweepOrphanFiles(nowMs int64, activeOutputDirs []string) 
 		gc.afterOrphanSnapshot()
 	}
 
-	activeDirs := make(map[string]struct{}, len(activeOutputDirs))
+	// Within an active output dir, protect only the file a running recorder can
+	// still be holding open — the newest one — rather than the whole directory.
+	//
+	// The blanket per-directory skip this replaces made the sweep unable to
+	// reclaim anything from a camera that is currently recording, which is
+	// where orphans actually accumulate. Observed on a live install: ~120 GB
+	// across three events-mode cameras that this sweep walked past on every
+	// pass, forever, because their recorders were running.
+	//
+	// The newest file is the right unit. ffmpeg's segment muxer writes one file
+	// at a time per output dir, in epoch-second name order, so it is the only
+	// one it can hold an fd on — including the stalled-source case this
+	// protection exists for, where no newer file exists precisely because
+	// ffmpeg is stuck on that one. It is also legitimately unindexed at all
+	// times by design: sweepSegments deliberately leaves the newest file alone
+	// until a further-newer one appears, since only then is its end time known.
+	// Everything older in the directory is either indexed (skipped above) or a
+	// genuine orphan, and still has to clear orphanGrace and the fresh HasPath
+	// recheck before anything is removed.
+	protectedOpen := make(map[string]struct{}, len(activeOutputDirs))
+	activeDirs := make(map[string]struct{})
 	for _, d := range activeOutputDirs {
-		activeDirs[normalizeSegmentPath(d)] = struct{}{}
+		matches, globErr := filepath.Glob(filepath.Join(d, "*.mp4"))
+		if globErr != nil {
+			// Could not enumerate it, so fall back to the old blanket skip for
+			// this directory: never trade a reclaim for a possible deletion of
+			// a file still being written.
+			activeDirs[normalizeSegmentPath(d)] = struct{}{}
+			continue
+		}
+		if len(matches) == 0 {
+			continue
+		}
+		sort.Strings(matches)
+		protectedOpen[normalizeSegmentPath(matches[len(matches)-1])] = struct{}{}
 	}
 
 	cutoff := time.UnixMilli(nowMs).Add(-orphanGrace)
@@ -763,11 +795,16 @@ func (gc *retentionGC) sweepOrphanFiles(nowMs int64, activeOutputDirs []string) 
 		if _, ok := known[normalizeSegmentPath(path)]; ok {
 			return nil
 		}
+		if _, ok := protectedOpen[normalizeSegmentPath(path)]; ok {
+			// The newest file in a currently-active output dir: the one a
+			// running recorder may still hold open, and the one sweepSegments
+			// intentionally leaves unindexed until a newer one appears. Never
+			// touched, regardless of mtime.
+			return nil
+		}
 		if _, ok := activeDirs[normalizeSegmentPath(filepath.Dir(path))]; ok {
-			// A currently-running recorder owns this directory right now —
-			// never touch anything in it, regardless of mtime (see this
-			// method's own doc comment on the stalled-open-segment case this
-			// protects against).
+			// Fallback for an active dir we could not enumerate — the old
+			// blanket skip, applied only where the newest file is unknown.
 			return nil
 		}
 
