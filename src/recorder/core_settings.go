@@ -24,58 +24,14 @@ var coreSourceRoles = map[sdk.RecordingSource]string{
 	sdk.RecordingSourceLow:  string(sdk.CameraRoleLowRes),
 }
 
-// coreDefaultRecordingSettings is what core stores for a camera nobody has
-// configured: its schema's own defaults (`cameras.schema.ts`'s
-// DEFAULT_RECORDING_SETTINGS).
-//
-// This matters because core's migration off this plugin's storage reads the
-// closed upstream plugin's key names (`recordedSources`, `recordingEnabled`,
-// `preBuffer`) — none of which this fork ever wrote — so it migrated every
-// camera to exactly these defaults. Worse, the one key whose name does match,
-// `recordingMode`, has values core doesn't recognise: this plugin's "off" and
-// "events" are both outside core's {continuous, event, adhoc}, so both
-// collapsed to "continuous".
-//
-// Adopting that as user intent would start continuous recording on every
-// camera deliberately switched off. So a payload identical to these defaults
-// is read as "never configured" rather than as a choice.
-func coreDefaultRecordingSettings() sdk.CameraRecordingSettings {
-	return sdk.CameraRecordingSettings{
-		Enabled:   true,
-		Mode:      sdk.RecordingModeContinuous,
-		PreBuffer: 10,
-		Sources: []sdk.RecordingSource{
-			sdk.RecordingSourceHigh,
-			sdk.RecordingSourceMid,
-			sdk.RecordingSourceLow,
-		},
-	}
-}
-
-// isCoreDefault reports whether core's settings are byte-identical to the
-// untouched default. The comparison is whole-struct on purpose: any edit in
-// core's UI — mode, tiers, pre-buffer, the enable toggle — hands core
-// authority over all of it, which is easier to explain than a per-field
-// tug-of-war between two config stores.
-func isCoreDefault(core sdk.CameraRecordingSettings) bool {
-	def := coreDefaultRecordingSettings()
-	if core.Enabled != def.Enabled || core.Mode != def.Mode || core.PreBuffer != def.PreBuffer {
-		return false
-	}
-	if len(core.Sources) != len(def.Sources) {
-		return false
-	}
-	for i := range core.Sources {
-		if core.Sources[i] != def.Sources[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // applyCoreRecordingSettings returns local with core's recording settings
-// applied, or local unchanged when core sent none — or sent only its own
-// untouched defaults (see coreDefaultRecordingSettings).
+// applied, or local unchanged when core sent none.
+//
+// Core is the contract. Whenever it sends a mode, that is the answer — this
+// plugin does not second-guess it, and cannot write back to it either
+// (CameraDevice.RecordingSettings is read-only, so there is no "sync" to
+// perform in the other direction). The plugin's own keys survive for exactly
+// one case: a core too old to send anything.
 //
 // Absence is detected on Mode: core's schema defaults it to "continuous"
 // whenever it has settings for a camera, so an empty Mode means the payload
@@ -83,8 +39,35 @@ func isCoreDefault(core sdk.CameraRecordingSettings) bool {
 // distinction matters — a zero-value CameraRecordingSettings has
 // Enabled=false, and treating that as "recording off" would silently stop
 // every recorder the moment this plugin ran against an older core.
+//
+// UNTIL 5.12.0 there was a second escape hatch here: a core payload
+// byte-identical to core's own schema default was read as "never configured"
+// and discarded. The reasoning was sound at the time — core's migration off
+// this plugin's storage read the CLOSED upstream plugin's key names
+// (`recordedSources`, `recordingEnabled`, `preBuffer`), none of which this
+// fork ever wrote, so it migrated every camera to exactly those defaults;
+// and the one key whose name did match, `recordingMode`, carried this
+// plugin's "off"/"events", which are outside core's {continuous, event,
+// adhoc} and so collapsed to "continuous". Adopting that wholesale would
+// have started recording on cameras deliberately switched off.
+//
+// It was still wrong, and permanently so: it made "continuous with all three
+// tiers" — core's default, and by far the most common configuration there is
+// — the one choice a user could not express. Selecting it in the UI produced
+// a payload indistinguishable from the migration's, so it lost to whatever
+// this plugin had stored. Worse on a fresh install, where the plugin's own
+// recordingMode defaults to "off": a brand-new camera reported "continuous"
+// in the UI and recorded nothing at all.
+//
+// The general lesson, which this repo has now hit four times (see
+// enabledNotifyTypes, migrateLegacyNotifyBooleans, and keyRoles's own
+// history): "the value equals the default" is not a usable proxy for "the
+// user never chose it". sdk.DeviceStorage.AddSchema writes a schema's
+// DefaultValue straight into the value map, so neither GetValue nor HasValue
+// can tell the two apart. The only reliable fix is to stop needing the
+// distinction — here, by letting core simply win.
 func applyCoreRecordingSettings(local RecordingConfig, core sdk.CameraRecordingSettings) RecordingConfig {
-	if core.Mode == "" || isCoreDefault(core) {
+	if core.Mode == "" {
 		return local
 	}
 

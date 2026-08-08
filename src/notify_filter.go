@@ -134,8 +134,22 @@ var notifyTypeOptions = []string{"person", "vehicle", "animal", "package", notif
 //     Distinguishing absent from empty is the entire point; this repo has already
 //     been bitten once by conflating them (see keyRoles in recorder/manager.go,
 //     where every camera stored [] and recorded nothing).
-//  2. Absent — derive from the five legacy booleans, each defaulting to true, so
-//     a config written by 5.5.0 or 5.6.0 keeps behaving exactly as it did.
+//
+//  2. Absent — derive from the five legacy booleans, each defaulting to true.
+//
+//     This branch is UNREACHABLE for any store that has had its schema
+//     declared, and saying otherwise (as this comment used to) is how the
+//     5.5.0/5.6.0 migration it claimed to perform went unnoticed as dead code
+//     for several releases. notifyTypesKey carries a DefaultValue, AddSchema
+//     writes a DefaultValue straight into the value map, and GetValue resolves
+//     stored -> schema default -> caller's fallback — so the nil sentinel above
+//     never fires in production. The real migration off those booleans is
+//     migrateLegacyNotifyBooleans (notify_migrate.go), which runs once and
+//     writes notifyTypesKey properly.
+//
+//     Retained because it is still correct, and still reachable, for a store
+//     with no schema declared: a camera whose AddSchema call failed (the error
+//     is deliberately ignored there), and every test fake in this package.
 //
 // The second value reports whether any resolution succeeded; false means the
 // store had nothing to say and the caller should fall back (a camera without an

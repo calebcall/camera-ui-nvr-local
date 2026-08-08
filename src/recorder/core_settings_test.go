@@ -142,33 +142,63 @@ func TestApplyCoreRecordingSettings_IgnoresUnknownSources(t *testing.T) {
 	}
 }
 
-// Core's migration could not read this fork's key names, so every camera's
-// stored recordingSettings is core's untouched default — including cameras
-// deliberately set to off or events here, both of which the migration
-// collapsed to continuous. Adopting that wholesale would start recording on
-// cameras the operator had switched off, so an exactly-default payload is
-// treated as "never configured" and the plugin's own config stands.
-func TestApplyCoreRecordingSettings_UntouchedDefaultDoesNotOverrideLocal(t *testing.T) {
-	off := local()
-	off.Mode = RecordingModeOff
-
-	got := applyCoreRecordingSettings(off, coreDefaultRecordingSettings())
-
-	if got.Mode != RecordingModeOff {
-		t.Fatalf("a camera set to off must stay off, got %q", got.Mode)
-	}
-	if !reflect.DeepEqual(got.Roles, off.Roles) {
-		t.Fatalf("expected local roles %v, got %v", off.Roles, got.Roles)
+// coreDefaults is core's own schema default for a camera — what a brand-new
+// camera arrives carrying, and what core's migration left on every existing
+// one. Until 5.12.0 this exact payload was discarded as "never configured".
+func coreDefaults() sdk.CameraRecordingSettings {
+	return sdk.CameraRecordingSettings{
+		Enabled:   true,
+		Mode:      sdk.RecordingModeContinuous,
+		PreBuffer: 10,
+		Sources: []sdk.RecordingSource{
+			sdk.RecordingSourceHigh,
+			sdk.RecordingSourceMid,
+			sdk.RecordingSourceLow,
+		},
 	}
 }
 
-// Once the operator actually edits the setting in core's UI, the payload
-// stops matching the default and core becomes authoritative.
+// TestApplyCoreRecordingSettings_DefaultPayloadStillWins is the regression for
+// the trapdoor. Core's default payload is the most common real configuration
+// there is — continuous, all three tiers — and it has to beat the plugin's
+// stored key like any other core value. Discarding it made that one choice
+// unexpressible: selecting it in the UI produced a payload indistinguishable
+// from the migration's, so the plugin's own value stood instead.
+func TestApplyCoreRecordingSettings_DefaultPayloadStillWins(t *testing.T) {
+	off := local()
+	off.Mode = RecordingModeOff
+
+	got := applyCoreRecordingSettings(off, coreDefaults())
+
+	if got.Mode != RecordingModeContinuous {
+		t.Fatalf("core said continuous; plugin's stored %q must not win, got %q", off.Mode, got.Mode)
+	}
+	want := []string{"high-resolution", "mid-resolution", "low-resolution"}
+	if !reflect.DeepEqual(got.Roles, want) {
+		t.Fatalf("expected core's tiers %v, got %v", want, got.Roles)
+	}
+}
+
+// TestApplyCoreRecordingSettings_FreshCameraRecords is the same bug in the
+// shape a new user meets it. A brand-new camera has no plugin config, so
+// readRecordingConfig hands back the schema default of "off" — and core sends
+// its default "continuous". The camera reported continuous in the UI and
+// recorded nothing.
+func TestApplyCoreRecordingSettings_FreshCameraRecords(t *testing.T) {
+	fresh := local()
+	fresh.Mode = RecordingModeOff // what recordingConfigSchema defaults to
+
+	if got := applyCoreRecordingSettings(fresh, coreDefaults()).Mode; got != RecordingModeContinuous {
+		t.Fatalf("a fresh camera must follow core and record, got %q", got)
+	}
+}
+
+// An edited payload was already honored before 5.12.0; it still is.
 func TestApplyCoreRecordingSettings_EditedSettingsOverrideLocal(t *testing.T) {
 	off := local()
 	off.Mode = RecordingModeOff
 
-	edited := coreDefaultRecordingSettings()
+	edited := coreDefaults()
 	edited.Sources = []sdk.RecordingSource{sdk.RecordingSourceHigh, sdk.RecordingSourceMid}
 
 	got := applyCoreRecordingSettings(off, edited)
