@@ -10,6 +10,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.11.0] - 2026-08-08
+
+Minor rather than patch: the notification import runs on upgrade and rewrites per-camera settings,
+switching **Override notifications** on for any camera the previous NVR plugin had configured. Some
+cameras will notify for types the plugin-wide settings currently have switched off — see below.
+
+### Added
+
+- **Per-camera notification settings from the previous NVR plugin are imported automatically.**
+  This plugin ships under the same package name as the closed `@camera.ui/camera-ui-nvr` it
+  replaces, so it inherits the same storage — every per-camera "notify me about these object
+  types" list you ever set is still there. It was simply never read: this plugin was written as a
+  reimplementation rather than a port and invented its own settings keys, so a camera you had set
+  to "person only" quietly notified you about everything its plugin-wide settings allowed.
+
+  On the next start, each camera's old list is imported into its own **Notify for** setting and
+  **Override notifications** is switched on, so the camera uses its own list instead of the
+  plugin-wide one. What gets imported is exactly what was configured before — including types the
+  plugin-wide settings currently have switched off, which means a camera can start notifying for
+  something it had not been. Every import is written to the log, one line per camera, and all of
+  it is ordinary editable settings afterward.
+
+  Cameras you have already configured under the new settings are left alone, and the import runs
+  once per camera — turning the override back off later means "follow the plugin-wide settings"
+  and is not undone on the next restart. The old values are never modified.
+
+### Fixed
+
+- **The per-detection-type notification toggles were a no-op whenever "Other detections" was
+  left on — which is the default.** Turning Vehicle off still produced a notification for every
+  passing car, and nothing in the UI hinted why.
+
+  camera.ui folds every segment attribute's *type* into an event's `Types`, and one of those is
+  `clip` — the CLIP embedding, attached to essentially every object detection once an embedding
+  model is configured. `clip` is not in `sdk.KnownEventTypes`, so the filter classified it as a
+  classifier-produced label and matched it against the "other" toggle. "Other" is on by default,
+  so the filter returned "notify" on that label and returned before it ever reached the vehicle
+  (or person, or animal) label it was supposed to be filtering on. Every object event with an
+  embedding therefore notified unconditionally.
+
+  `clip` and `line-crossing` are now treated as non-subjects, exactly like `motion`, `audio` and
+  `face` already were. Genuine classifier types are unaffected and still filter as "other".
+
+- **The pre-5.7 notification switches have been silently ignored since 5.7, and are now imported.**
+  If you had switched a detection type off back when each one was its own toggle, the upgrade to
+  the current list-shaped setting turned it back on without saying so.
+
+  The code meant to carry those old values forward could never run. It decided a value was unset
+  by checking whether reading it returned nothing — but the new setting ships with a default, and
+  reading an unset key returns that default rather than nothing, so the carry-forward never
+  triggered once. The old switches are now imported properly, on the first start after upgrading,
+  for both the plugin-wide settings and any camera that had its own.
+
+  Only applied where the current list is still untouched; if you have since edited **Notify for**,
+  that wins and nothing is written. Runs once, and is logged when it does anything.
+
 ## [5.10.0] - 2026-08-01
 
 ### Fixed

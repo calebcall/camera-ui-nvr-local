@@ -459,6 +459,11 @@ func TestStorageSchema_LegacyNotifyKeys_AreNotDeclared(t *testing.T) {
 	legacy := map[string]bool{
 		notifyPersonKey: true, notifyVehicleKey: true, notifyAnimalKey: true,
 		notifyPackageKey: true, notifyOtherKey: true,
+		// The closed plugin's per-camera object filter. Same rule and a sharper
+		// consequence: declaring it would give it a DefaultValue, which
+		// AddSchema writes straight into storage — overwriting the very values
+		// migrateNotifyObjects exists to read.
+		notifyObjectsKey: true,
 	}
 
 	p := &NVRPlugin{}
@@ -476,13 +481,42 @@ func TestStorageSchema_LegacyNotifyKeys_AreNotDeclared(t *testing.T) {
 
 // TestCameraNotifySchema_IsOverridePlusOneControl mirrors the global guard for
 // the per-camera panel: an override toggle and one multi-select, nothing more.
+//
+// Counted over the VISIBLE fields, because the panel is what this guards. The
+// migration marker is also declared there — it needs a schema for SetValue to
+// persist it — but it is Hidden, so it draws no control and cannot be what this
+// test is protecting against.
 func TestCameraNotifySchema_IsOverridePlusOneControl(t *testing.T) {
 	var keys []string
 	for _, s := range cameraNotifySchema() {
+		if s.Hidden {
+			continue
+		}
 		keys = append(keys, s.Key)
 	}
 
 	if !slices.Equal(keys, []string{notifyOverrideKey, notifyTypesKey}) {
-		t.Errorf("per-camera fields = %v, want [%s %s]", keys, notifyOverrideKey, notifyTypesKey)
+		t.Errorf("per-camera visible fields = %v, want [%s %s]", keys, notifyOverrideKey, notifyTypesKey)
 	}
+}
+
+// TestCameraNotifySchema_MigrationMarkerIsHiddenAndDefaultless pins both
+// properties the marker depends on. Visible, it is an uninterpretable toggle in
+// the camera drawer; carrying a DefaultValue, AddSchema writes it into storage
+// at declaration time and every camera is marked migrated before the migration
+// has looked at a single one.
+func TestCameraNotifySchema_MigrationMarkerIsHiddenAndDefaultless(t *testing.T) {
+	for _, s := range cameraNotifySchema() {
+		if s.Key != notifyObjectsMigratedKey {
+			continue
+		}
+		if !s.Hidden {
+			t.Error("the migration marker is visible; it would render as a stray toggle")
+		}
+		if s.DefaultValue != nil {
+			t.Errorf("the migration marker has DefaultValue %v; AddSchema would self-mark every camera", s.DefaultValue)
+		}
+		return
+	}
+	t.Fatalf("%q is not declared; SetValue silently no-ops without a schema", notifyObjectsMigratedKey)
 }

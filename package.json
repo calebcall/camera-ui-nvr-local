@@ -1,7 +1,7 @@
 {
   "displayName": "NVR (Local)",
   "name": "@camera.ui/camera-ui-nvr",
-  "version": "5.10.0",
+  "version": "5.11.0",
   "description": "An open-source, local NVR hub for camera.ui: stores and manages video recordings from your cameras entirely on your own hardware, with no cloud dependency.  This is not an official plugin but is a fork/rewrite of the NVR functionality to remove the cloud dependency.",
   "author": "calebcall (https://github.com/calebcall/camera-ui-nvr-local)",
   "main": "./main.go",
