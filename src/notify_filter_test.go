@@ -184,6 +184,52 @@ func TestNotifyLabelFilter_NonSubjectTypes_AreIgnored(t *testing.T) {
 	}
 }
 
+// TestNotifyLabelFilter_InternalTypes_DoNotCountAsOther is the regression for
+// the bug that made this whole filter a no-op in practice.
+//
+// camera.ui puts every segment attribute's TYPE into an event's Types, and one
+// of those is "clip" — the CLIP embedding, present on essentially every object
+// detection once an embedding model is configured. Classified as "other" (on by
+// default) it short-circuited NotifyAllowed to true before the loop ever
+// reached the vehicle label, so a user with Vehicle off was notified for every
+// passing car. "line-crossing" is the same shape via the trigger path.
+//
+// The event below is the real one from the report, reduced: an audio-triggered
+// event whose only subject is a vehicle the user turned off, carrying a CLIP
+// embedding because the detector produced one.
+func TestNotifyLabelFilter_InternalTypes_DoNotCountAsOther(t *testing.T) {
+	// Exactly the shipped default set minus vehicle — "other" stays ON, which
+	// is the condition that made the leak fire.
+	f := newNotifyLabelFilter(notifyStore{
+		notifyTypesKey: []any{"person", "package", notifyTypeOther},
+	}, nil)
+
+	for _, internal := range []string{"clip", "line-crossing"} {
+		t.Run(internal, func(t *testing.T) {
+			ev := store.DetectionEvent{
+				ID:       "ev-1",
+				CameraID: "cam-1",
+				Types:    []string{"audio", "motion", "vehicle", internal},
+				Segments: []sdk.EventSegment{{
+					Detections: []sdk.EventDetection{{Label: "vehicle", Score: 0.81}},
+					Attributes: []sdk.EventAttribute{{Type: internal, Label: "vehicle"}},
+				}},
+			}
+
+			if f.NotifyAllowed(ev) {
+				t.Errorf("vehicle event notified with %q present; an internal type must not vote as \"other\"", internal)
+			}
+		})
+	}
+
+	// The flip side: a real classifier type still reaches "other", so tightening
+	// the non-subject set did not quietly disable the catch-all.
+	bird := store.DetectionEvent{ID: "ev-2", Types: []string{"motion", "bird", "clip"}}
+	if !f.NotifyAllowed(bird) {
+		t.Error("a classifier type was suppressed with \"other\" enabled; the catch-all must still work")
+	}
+}
+
 // TestNotifyLabelFilter_NoLabelsAtAll_Allows pins the fail-open default. An
 // extra notification for a shape we did not anticipate is recoverable; silent,
 // undiagnosable suppression is not.
@@ -385,7 +431,7 @@ func TestCameraNotifyRegistry_AddDeclaresSchemaAndResolves(t *testing.T) {
 	var r cameraNotifyRegistry
 	storage := newFakeCameraSettings()
 
-	r.add("cam-1", storage)
+	r.add("cam-1", storage, nil)
 
 	for _, key := range []string{notifyOverrideKey, notifyTypesKey} {
 		if !storage.HasSchema(key) {
@@ -410,9 +456,9 @@ func TestCameraNotifyRegistry_AddIsIdempotent(t *testing.T) {
 	var r cameraNotifyRegistry
 	storage := newFakeCameraSettings()
 
-	r.add("cam-1", storage)
+	r.add("cam-1", storage, nil)
 	declared := len(storage.declared)
-	r.add("cam-1", storage)
+	r.add("cam-1", storage, nil)
 
 	if got := len(storage.declared); got != declared {
 		t.Errorf("declared key count went %d -> %d on re-add", declared, got)
@@ -424,7 +470,7 @@ func TestCameraNotifyRegistry_AddIsIdempotent(t *testing.T) {
 
 func TestCameraNotifyRegistry_NilStorage_IsIgnored(t *testing.T) {
 	var r cameraNotifyRegistry
-	r.add("cam-1", nil) // must not panic
+	r.add("cam-1", nil, nil) // must not panic
 
 	if _, ok := r.CameraNotifySettings("cam-1"); ok {
 		t.Error("a nil storage was registered; it must be ignored")
@@ -448,6 +494,17 @@ func (f *fakeCameraSettings) GetValue(key string, fallback ...any) any {
 	if len(fallback) > 0 {
 		return fallback[0]
 	}
+	return nil
+}
+
+// SetValue mirrors sdk.DeviceStorage: a key with no registered schema is
+// silently ignored, which is the behavior migrateNotifyObjects orders itself
+// around.
+func (f *fakeCameraSettings) SetValue(key string, value any) error {
+	if !f.declared[key] {
+		return nil
+	}
+	f.values[key] = value
 	return nil
 }
 

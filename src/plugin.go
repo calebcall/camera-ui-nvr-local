@@ -518,6 +518,17 @@ func (p *NVRPlugin) StorageSchema() []sdk.JsonSchema {
 			Store:  &storeTrue,
 		},
 		{
+			// Bookkeeping for the pre-5.7 boolean import, not a setting — see
+			// notifyBooleansMigratedKey. Declared without a Group so it cannot
+			// land on the Detections tab, and without a DefaultValue so
+			// declaring it does not mark the plugin migrated on its own.
+			Type:   sdk.JsonSchemaTypeBoolean,
+			Key:    notifyBooleansMigratedKey,
+			Title:  "Imported the pre-5.7 notification switches",
+			Hidden: true,
+			Store:  &storeTrue,
+		},
+		{
 			Type:         sdk.JsonSchemaTypeNumber,
 			Key:          nvrQuotaGBStorageKey,
 			Title:        "Disk Quota (GB)",
@@ -1110,6 +1121,18 @@ func (h recorderHandleWithRegistry) ActiveOutputDirs() []string {
 // Every camera handed in is adapted to recorder.ManagedCamera via
 // sdkManagedCamera below and registered/unregistered accordingly.
 func (p *NVRPlugin) ConfigureCameras(cameras []*sdk.CameraDevice) error {
+	// The plugin-scope half of the notification migration (notify_migrate.go).
+	// Here rather than in NewPlugin because sdk.Run only calls DefineSchemas on
+	// this plugin's storage AFTER the constructor returns (see run.go), and
+	// SetValue silently no-ops for a key with no registered schema — migrating
+	// from the constructor would mark the plugin done without writing anything.
+	// ConfigureCameras is documented as "called once on startup", which is
+	// exactly the guarantee this needs; the marker makes a second call a no-op
+	// regardless.
+	if writable, ok := any(p.store).(notifyMigrationStore); ok {
+		migrateLegacyNotifyBooleans("plugin", writable, p.Logger)
+	}
+
 	managed := make([]recorder.ManagedCamera, 0, len(cameras))
 	for _, cam := range cameras {
 		p.attachDetectionIngestion(cam)
@@ -1333,7 +1356,7 @@ func (p *NVRPlugin) attachDetectionIngestion(cam *sdk.CameraDevice) {
 	// for every camera we are handed, and is scoped per plugin AND per camera,
 	// so declaring on it cannot collide with a camera-provider plugin's schema
 	// for the same camera.
-	p.cameraNotify.add(cam.ID(), cam.Storage())
+	p.cameraNotify.add(cam.ID(), cam.Storage(), p.Logger)
 
 	ingester := newDetectionEventIngester(p.events, &p.recorders, thumbs, p.segments, notifier, p.recorder, describer, newNotifyLabelFilter(p.store, &p.cameraNotify), p.Logger)
 	p.detectionSubs.add(cam.ID(), cam.OnDetectionEvent(ingester.handle))

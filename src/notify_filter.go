@@ -85,6 +85,37 @@ var notifyObjectLabelKeys = map[string]string{
 	"package": notifyPackageKey,
 }
 
+// nonSubjectEventTypes covers the event types that reach an event's Types but
+// are no more a notification subject than motion or audio, and that
+// sdk.KnownEventTypes does not list.
+//
+// camera.ui's event manager folds every segment attribute's TYPE and every
+// trigger's type into DetectionEvent.Types (its updateTypes/extractTriggers),
+// and two of the values it puts there are outside the SDK's vocabulary:
+//
+//   - "clip" is the CLIP embedding attribute, attached to essentially every
+//     object detection whenever an embedding model is configured. Unlisted, it
+//     fell through to notifyTypeOther — and because "other" is on by default,
+//     NotifyAllowed then returned true for EVERY such event before it ever
+//     reached the object label. That was the bug: someone with Vehicle turned
+//     off still got a notification for every passing car, and no combination of
+//     the per-label toggles could stop it short of turning "other" off too.
+//   - "line-crossing" is a trigger type, exactly like motion or doorbell. The
+//     crossing carries its subject as an ordinary label ("person", "vehicle")
+//     which is already in Types alongside it, so the trigger type itself must
+//     not vote.
+//
+// A denylist here rather than a proposal to widen sdk.KnownEventTypes: that set
+// is the SDK's published vocabulary of standard types, while these are one
+// internal attribute and one trigger type that this filter specifically must
+// not mistake for a classifier label. It is also the safe direction to be wrong
+// in — a genuine classifier type missing from this map still filters as
+// "other", which is exactly what it should do.
+var nonSubjectEventTypes = map[string]struct{}{
+	"clip":          {},
+	"line-crossing": {},
+}
+
 // notifyTypeOther is the multi-select entry covering classifier-produced labels
 // outside the standard set, mirroring what notifyOtherKey governed.
 const notifyTypeOther = "other"
@@ -263,8 +294,13 @@ func (f *notifyLabelFilter) NotifyAllowed(event store.DetectionEvent) bool {
 			// face/license_plate, or a trigger type such as doorbell. These
 			// never justify a notification on their own and must not keep an
 			// event alive after its actual object label was turned off, so they
-			// are skipped rather than treated as "other".
+			// are skipped rather than treated as "other". nonSubjectEventTypes
+			// carries the same rule for the two camera.ui emits that the SDK's
+			// set omits; see there for why that omission was load-bearing.
 			if _, known := sdk.KnownEventTypes[label]; known {
+				continue
+			}
+			if _, nonSubject := nonSubjectEventTypes[label]; nonSubject {
 				continue
 			}
 			typ = notifyTypeOther
@@ -352,6 +388,24 @@ func cameraNotifySchema() []sdk.JsonSchema {
 				Value:    true,
 			}},
 		},
+		{
+			// Bookkeeping for the notifyObjects import, not a setting — see
+			// notifyObjectsMigratedKey for why it is hidden and why it
+			// deliberately carries no DefaultValue.
+			Type:   sdk.JsonSchemaTypeBoolean,
+			Key:    notifyObjectsMigratedKey,
+			Title:  "Imported notification settings from the previous NVR plugin",
+			Hidden: true,
+			Store:  &storeTrue,
+		},
+		{
+			// Same bookkeeping, for this camera's own pre-5.7 booleans.
+			Type:   sdk.JsonSchemaTypeBoolean,
+			Key:    notifyBooleansMigratedKey,
+			Title:  "Imported the pre-5.7 notification switches",
+			Hidden: true,
+			Store:  &storeTrue,
+		},
 	}
 }
 
@@ -373,11 +427,20 @@ type cameraNotifyRegistry struct {
 	stores map[string]recorder.CameraStorage
 }
 
-// add registers cameraID's storage and declares the override schema on it.
+// add registers cameraID's storage, declares the override schema on it, and
+// runs the one-time notifyObjects import (notify_migrate.go).
+//
 // Declaration happens here, once per attach, rather than on every read: unlike
 // the recording config there is no equivalent of readRecordingConfig running
-// periodically to re-assert it.
-func (r *cameraNotifyRegistry) add(cameraID string, storage recorder.CameraStorage) {
+// periodically to re-assert it. The migration follows in the same place and for
+// the same reason, and strictly AFTER the schemas exist — sdk's SetValue
+// no-ops for a key with no registered schema.
+//
+// The type assertion is how the writer is reached without widening
+// recorder.CameraStorage; see notifyMigrationStore. A real camera's storage is
+// an *sdk.DeviceStorage and always satisfies it, so the assertion failing means
+// a test fake that does not write, which is exactly when skipping is correct.
+func (r *cameraNotifyRegistry) add(cameraID string, storage recorder.CameraStorage, logger *sdk.Logger) {
 	if storage == nil {
 		return
 	}
@@ -387,6 +450,18 @@ func (r *cameraNotifyRegistry) add(cameraID string, storage recorder.CameraStora
 			continue
 		}
 		_ = storage.AddSchema(&schema)
+	}
+
+	if writable, ok := storage.(notifyMigrationStore); ok {
+		// notifyObjects first. Both write notifyTypes, and running the import
+		// first is what resolves a camera carrying values from BOTH plugins:
+		// the import flips the override on, which takes notifyTypes off its
+		// default and so makes the boolean pass stand down. That is the right
+		// precedence — the booleans only ever applied to a camera whose
+		// override was already on, and such a camera is not inert, so the
+		// import declines it and the booleans win instead.
+		migrateNotifyObjects(cameraID, writable, logger)
+		migrateLegacyNotifyBooleans("camera "+cameraID, writable, logger)
 	}
 
 	r.mu.Lock()
