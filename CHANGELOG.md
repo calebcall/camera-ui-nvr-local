@@ -10,6 +10,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > auto-updater never replaces this local build with the license-gated original. The jump from
 > `0.1.0` to `5.x` reflects that pin, not 5 major releases of change.
 
+## [5.12.0] - 2026-08-08
+
+Minor rather than patch: camera.ui's own recording settings now take effect where they previously
+did not, so a camera can change recording mode on upgrade. It changes to what the UI has been
+showing you all along.
+
+### Fixed
+
+- **camera.ui's recording settings are honoured again — including "continuous".** A camera set to
+  continuous recording in camera.ui could silently be recording in events mode instead, or not at
+  all, while the UI showed continuous throughout.
+
+  camera.ui owns recording settings; this plugin keeps its own older per-camera copy and folds
+  core's values over the top. It refused to do so whenever core's values happened to be identical
+  to core's own defaults, on the grounds that such a payload probably came from core's migration
+  rather than from you. That was defensible once — core's migration read the previous NVR plugin's
+  key names, which this fork never wrote, and left every camera looking default — but it made
+  **continuous recording of all three stream tiers**, which *is* core's default and by far the most
+  common setup, the one configuration impossible to express. Choosing it produced a payload
+  indistinguishable from the migration's, so this plugin's older stored value stood instead.
+
+  Worst on a fresh install: a newly added camera reported continuous in the UI and recorded
+  **nothing at all**, because this plugin's own recording mode defaults to off and core's default
+  was being discarded.
+
+  camera.ui is now simply authoritative. This plugin's own recording mode is used only when
+  camera.ui sends no recording settings at all — an older camera.ui — and the field now says so.
+  Nothing is written back to camera.ui; a plugin cannot, and should not.
+
+  **On upgrade, check any camera whose recording mode looked wrong.** It will now follow what
+  camera.ui shows. Mode changes are logged by the reconcile pass.
+
+- **This plugin's own Recording Mode field no longer writes a misleading value into every camera.**
+  It carried a schema default of "off", and declaring a default writes it straight into storage — so
+  every camera that ever loaded had an explicit "off" on record that it never chose. That is what let
+  the field beat camera.ui in the first place. The default is gone; the resolved behaviour is
+  unchanged, and the field now says in its description that camera.ui wins when it has settings.
+
+### Changed
+
+- **Audited every remaining place this plugin asks "did the user set this?".** The same mistake —
+  treating "the value equals the default" as "never configured" — has now caused four separate bugs
+  here, because declaring a schema default makes absence undetectable by either `GetValue` or
+  `HasValue`. Result: the notification-import keys are correct by construction (deliberately never
+  declared as schemas, with a test enforcing it), the recorded stream roles were already fixed with
+  their own explicit empty-value fallback, and the one remaining dead branch — the pre-5.7 boolean
+  fallback that can no longer run — is now documented as unreachable instead of advertising a
+  migration it never performed. That migration is real and separate, and shipped in 5.11.0.
+
 ## [5.11.0] - 2026-08-08
 
 Minor rather than patch: the notification import runs on upgrade and rewrites per-camera settings,

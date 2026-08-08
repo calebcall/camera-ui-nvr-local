@@ -955,12 +955,24 @@ func recordingConfigSchema() []sdk.JsonSchema {
 	storeTrue := true
 	return []sdk.JsonSchema{
 		{
-			Type:         sdk.JsonSchemaTypeString,
-			Key:          keyRecordingMode,
-			Title:        "Recording Mode",
-			Enum:         []string{string(RecordingModeOff), string(RecordingModeContinuous), string(RecordingModeEvents)},
-			DefaultValue: string(RecordingModeOff),
-			Store:        &storeTrue,
+			Type:  sdk.JsonSchemaTypeString,
+			Key:   keyRecordingMode,
+			Title: "Recording Mode",
+			// Core owns this now (core_settings.go). The field stays for a
+			// core too old to send recordingSettings at all, where it is the
+			// only control there is — but on any current install it is
+			// overridden, and a panel that silently does nothing is the exact
+			// failure this whole area has been generating.
+			Description: "Only used when camera.ui itself has no recording settings for this camera. Otherwise the camera's own Recording settings win.",
+			Enum:        []string{string(RecordingModeOff), string(RecordingModeContinuous), string(RecordingModeEvents)},
+			// Deliberately NO DefaultValue. AddSchema writes a DefaultValue
+			// straight into storage, which is what made this key indistinguishable
+			// from a real choice and let it beat core — and it wrote a misleading
+			// "off" into every camera that ever loaded. readRecordingConfig passes
+			// RecordingModeOff as its own read fallback, so the resolved value is
+			// unchanged; the difference is that the key now stays genuinely absent
+			// until somebody sets it, and HasValue means what it says.
+			Store: &storeTrue,
 		},
 		{
 			Type:         sdk.JsonSchemaTypeNumber,
